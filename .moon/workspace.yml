@@ -5,6 +5,7 @@ projects:
   - "tools/*"
   - "logics/*"
   - "qualities/*"
+  - "sites/*"
 
 # Configures the version control system (VCS). Also known as
 # source code management (SCM).
