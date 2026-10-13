@@ -2,6 +2,23 @@
 
 > 出典: 2026-10-13時点の統合版 `REQUIREMENTS.md`。要件ID・受入条件IDは維持。
 
+## フェーズ別の拡張境界
+
+```mermaid
+flowchart TD
+  A[Agent / User] --> CLI[axvern]
+  CLI --> P[Policy + Pueue Adapter / v0.1]
+  CLI --> D[Codebase Adapters / v0.2]
+  P --> Q[Pueue task + logs]
+  D --> P
+  Q --> R[Result Query / v0.3]
+  D --> R
+  R --> B[Benchmark + Comparison / v0.4+]
+  D --> B
+```
+
+v0.1で`execution_id`とPueueタスクIDの対応は定義するが、高度な全文／行単位検索はv0.3まで必須としない。v0.2の`fs analyze`は既存CLI結果の集約であり、過去結果への検索インターフェースはv0.3の責務とする。
+
 ## 3. 想定利用フロー
 
 ```mermaid

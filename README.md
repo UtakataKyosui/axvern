@@ -1,161 +1,175 @@
 # axvern
 
-**Run commands in the background. Retrieve only the output you need.**
+**Measure. Understand. Optimize. Verify.**
 
-axvern（アクスヴァーン）は、Coding Agentと開発者向けのRust製CLIです。[Pueue](https://github.com/Nukesor/pueue) をバックグラウンド実行基盤として利用し、コマンドの実行管理、保存済みログの部分抽出、開発作業に適したモダンCLIの呼び出しを一つのインターフェースにまとめます。
+**axvern** は、Coding Agentと開発者が、コードベースとプログラムの性能を根拠に基づいて改善するための **Rust製・開発最適化ハーネス** を目指すプロジェクトです。
+
+Pueueによる非同期実行、Rust製を中心とした既存CLIの組み合わせ、実行結果の選択的取得を土台に、**調査 → 計測 → ボトルネック特定 → 改善 → 再計測** のサイクルを支援します。
 
 > [!IMPORTANT]
-> **設計・開発準備段階です。** このREADMEのコマンド例は **実装予定のCLI仕様** であり、現時点で動作を保証するものではありません。Pueue連携・引数の安全性・ログ取得方式は事前検証（Spike）の対象です。
+> **設計・開発準備段階です。** 以下は構想・実装予定のコマンド仕様です。インストール可能な製品や動作確認済み機能を示すものではありません。性能改善の自動保証や、Agentによる無条件のコード変更は行いません。
 
-## なぜ作るのか
+## Why axvern?
 
-Coding Agentに必要なのは、毎回数千行のビルド・テストログを読むことではありません。**必要なときに、必要な情報だけを、再実行せず取り出せること**です。
+Coding Agentはコードを生成できます。しかし、コードが動くことと、効率的に動くことは別問題です。
 
-従来のコマンド実行には、次のような課題があります。
+- ビルドが遅い場合、その原因がコンパイル、依存関係、リンク、キャッシュのどこにあるのか分かりにくい。
+- プログラムが遅い場合、印象だけでは改善すべき箇所を特定できない。
+- ビルド・テスト・計測のログが長く、Agentのコンテキストを圧迫する。
+- 改善前後を同じ条件で計測しないと、性能が本当に改善したか判断できない。
+- 優れたCLIが存在しても、Agentがツールごとのオプションや出力形式を都度扱う必要がある。
 
-- 長いテストやビルドが完了するまで、Agentが実行結果を待つ。
-- 大量の標準出力がAgentのコンテキストを消費する。
-- 一度流れたログを確認するために、同じコマンドを再実行してしまう。
-- `ls` / `find` / `grep` などの使い方や出力形式が用途ごとにばらつく。
-- リポジトリの概要把握に、複数の調査コマンドを手で組み合わせる必要がある。
+axvernは、**既存の開発・計測ツールを組み合わせ、Agentが解釈しやすい結果と再現可能な比較を提供する**ことを目標とします。
 
-axvernはこれらを、**既存CLIへの委譲と、結果の選択的取得**によって解決することを目指します。
-
-## できること（計画中）
-
-### 1. 非同期実行と結果の再利用
-
-```bash
-# Pueueにタスクを登録し、実行IDを受け取る
-axvern run -- cargo test
-
-# 実行状態を確認し、必要なら完了まで待つ
-axvern status <execution-id>
-axvern wait <execution-id>
-
-# 保存済みログから必要な部分だけ取得する（再実行しない）
-axvern query <execution-id> --errors
-axvern query <execution-id> --match "mismatched types"
-axvern query <execution-id> --tail 50
-
-# 元ログを確認する
-axvern recall <execution-id>
-```
-
-`query` と `recall` は、Pueueに残っているログを参照します。ログが削除された場合の復元や、stdout/stderrの完全な分離復元は保証しません。
-
-### 2. モダンCLIを利用したファイル操作・コード調査
-
-```bash
-# eza: 一覧
-axvern fs list ./src
-
-# fd: パス検索
-axvern fs find '*.rs' ./src
-
-# ripgrep: テキスト検索
-axvern fs search 'TODO' ./src
-
-# bat: ファイルの一部を閲覧（v0.1追加候補）
-axvern fs read ./src/main.rs --from-line 1 --lines 80
-
-# ast-grep: 構文ベース検索（v0.1追加候補）
-axvern code search --pattern 'fn $NAME($$$ARGS) { $$$BODY }' ./src
-```
-
-既存コマンドを無条件に置換するわけではありません。`find` と `fd` のように引数や探索対象の既定値が異なるものは、**専用サブコマンド**として使い分けます。汎用コマンドの自動置換は初期状態で無効にし、検証済みのルールに限定します。
-
-### 3. パス分析（v0.2）
-
-```bash
-axvern fs analyze . --max-depth 3 --format json
-```
-
-**`eza` + `fd` + `tokei`** を組み合わせ、指定パスのディレクトリ構成、主要な設定ファイル、言語別のコード統計を統合します。分析ロジックを一から作るのではなく、既存CLIの出力を組み立てる方針です。
-
-### 4. 追加の開発支援（v0.2）
-
-| コマンド（案） | 利用するCLI | 用途 |
-| --- | --- | --- |
-| `axvern code stats [path]` | `tokei` | 言語別コード統計 |
-| `axvern code diff [--staged]` | `git diff` + `delta` | 差分生成と表示 |
-| `axvern system disk-usage [path]` | `dust` | 容量の大きい項目を確認 |
-| `axvern system processes` | `procs` | プロセスの確認 |
-| `axvern text replace ...` | `sd` | テキスト置換（追加候補・変更操作） |
-
-## 仕組み
+## Optimization loop
 
 ```mermaid
 flowchart TD
-    Agent["Coding Agent / Developer"] --> CLI["axvern CLI"]
-    CLI --> Plan["Command / Adapter"]
-    Plan --> Policy{"Policy Engine"}
-    Policy -->|Allow / Approved| Pueue["Pueue / pueued"]
-    Policy -->|Deny / Not approved| Block["Reject"]
-    Pueue --> Logs[("Task status / retained logs")]
-    CLI --> Query["Result Query"]
-    Query --> Logs
-    Query --> Extract["Selective output"]
-    Extract --> Agent
-    Plan -.-> Modern["eza / fd / rg / bat / ast-grep / tokei ..."]
+    Inspect["Inspect codebase"] --> Build["Build / Test / Run"]
+    Build --> Measure["Measure baseline"]
+    Measure --> Diagnose["Identify bottlenecks"]
+    Diagnose --> Improve["Improve code or configuration"]
+    Improve --> Verify["Re-measure under comparable conditions"]
+    Verify --> Decision{"Improvement confirmed?"}
+    Decision -->|Yes| Report["Record evidence and results"]
+    Decision -->|No| Diagnose
 ```
 
-- **Pueue**: タスクキュー、非同期実行、実行状態、基本ログ保持を担当。
-- **axvern**: 実行計画、ポリシー、実行IDの対応付け、ログ検索、結果の整形を担当。
-- **モダンCLI**: ファイル操作・解析・表示など個別の処理を担当。
+最適化は、**正しさを維持しながら、再現性のある計測結果に基づいて判断する**ことを前提にします。計測条件、比較対象、実行環境、実行IDを記録し、性能向上と引き換えの不具合を避けるためテスト結果も追跡します。
 
-複数ツールを使う `fs analyze` では、個々の実行を追跡し、分析結果を統合する設計です。
+## Planned capabilities
 
-## ロードマップ
+### 1. Background command execution（v0.1）
 
-| リリース | 重点 | 主なコマンド |
+[Pueue](https://github.com/Nukesor/pueue) をバックグラウンド実行基盤として利用します。v0.1では実行IDから状態を照会し、基本的なログ参照はPueueに委譲します。高度な部分抽出はv0.3で追加します。
+
+<!-- 以下は全フェーズを含む予定コマンド例です。 -->
+```bash
+axvern run -- cargo test
+axvern status <execution-id>
+axvern wait <execution-id>
+
+# v0.3で追加予定（v0.1では未提供）
+axvern query <execution-id> --errors
+axvern query <execution-id> --match "error"
+axvern recall <execution-id>
+```
+
+`query` と `recall` はコマンドを再実行しません。ログ保持期間やPueue側の削除に制約があり、stdoutとstderrの完全分離復元は保証しません。
+
+### 2. Codebase inspection（v0.2）
+
+`eza`、`fd`、`rg`、`bat`、`ast-grep`、`tokei` を組み合わせ、コードベースの規模・構造・言語構成・検索対象を把握します。
+
+```bash
+axvern fs list ./src
+axvern fs find '*.rs' ./src
+axvern fs search 'TODO' ./src
+axvern fs read ./src/main.rs --from-line 1 --lines 80  # v0.2
+axvern code search --pattern 'fn $NAME($$$ARGS) { $$$BODY }' ./src  # v0.2
+axvern fs analyze . --max-depth 3 --format json  # v0.2
+axvern code stats .                            # v0.2
+```
+
+`fs analyze` は、`eza`（構造）+ `fd`（ファイル・設定ファイル探索）+ `tokei`（コード統計）を統合する機能です。構造の検出結果と設計上の推定は明確に区別します。
+
+### 3. Build and runtime measurement（v0.4以降の構想）
+
+ビルド・実行を同じ条件で測定し、結果を比較するためのインターフェースを検討します。
+
+```bash
+# 以下は将来の構想。未確定のCLI仕様
+axvern measure build -- cargo build --release
+axvern measure run -- ./target/release/my-app
+axvern benchmark --warmup 3 --runs 10 -- ./target/release/my-app
+axvern compare <baseline-id> <candidate-id>
+```
+
+主な候補は [`hyperfine`](https://github.com/sharkdp/hyperfine)（反復計測・統計・JSON出力）、OS標準の計測機能、ビルドツール自身が提供するタイミング情報です。単発の実行時間と、統計的なベンチマーク結果は区別します。
+
+### 4. Bottleneck investigation（v0.4以降の構想）
+
+プロファイリング等の既存ツールを利用して、遅延が生じる箇所の調査を支援します。
+
+- [`samply`](https://github.com/mstange/samply)：CPUプロファイル取得の候補。
+- [`flamegraph`](https://github.com/flamegraph-rs/flamegraph)：プロファイルをフレームグラフとして表示する候補。
+- [`hyperfine`](https://github.com/sharkdp/hyperfine)：改善前後の処理時間比較。
+- `cargo` / `pnpm` / `moonrepo` 等：既存のビルドタスク、依存関係、実行メタデータの取得元。
+
+プロファイラのOS対応、権限、計測オーバーヘッド、成果物形式は事前検証が必要です。Rustで書かれたCLIだけに限定すると必要な計測手段を失う場合があるため、**Rust製CLIを優先しつつ、用途に応じて非Rust製の既存ツールも採用**します。
+
+### 5. Additional utilities（v0.2の候補・将来機能）
+
+| Planned command | Existing CLI | Role |
 | --- | --- | --- |
-| **v0.1** | 実行管理・選択的ログ取得 | `run`、`status`、`wait`、`history`、`query`、`recall`、`policy check`、`doctor` |
-| **v0.1** | 基本ファイル操作 | `fs list`、`fs find`、`fs search` |
-| **v0.1 追加候補** | 部分閲覧・構文検索 | `fs read`、`code search` |
-| **v0.2** | パス分析・コード/システム情報 | `fs analyze`、`code stats`、`code diff`、`system disk-usage`、`system processes` |
-| **v0.2 追加候補** | ファイル変更 | `text replace` |
+| `axvern code diff` | `git diff` + `delta` | 変更差分の把握 |
+| `axvern system disk-usage` | `dust` | 大きなディレクトリの特定 |
+| `axvern system processes` | `procs` | プロセス調査 |
+| `axvern text replace` | `sd` | テキスト置換（追加候補・変更操作） |
 
-詳細な実装順序と受入条件は [ロードマップ](docs/ROADMAP.md) と [検証計画](docs/VERIFICATION.md) を参照してください。
+## Design principle: Compose, don't reinvent
 
-## 実行環境・依存関係
+```mermaid
+flowchart TD
+    User["Coding Agent / Developer"] --> Ax["axvern"]
+    Ax --> Policy["Policy / Execution Plan"]
+    Policy --> Queue["Pueue: task execution & logs"]
+    Queue --> Tools["Existing CLI tools"]
+    Tools --> Artifacts["Logs / Metrics / Reports"]
+    Artifacts --> Extract["Selective retrieval & structured results"]
+    Extract --> User
+    Ax --> Analysis["Composition / Comparison"]
+    Analysis --> Artifacts
+```
 
-- **Rust**: axvern本体の実装言語。
-- **Pueue / pueued**: 実行管理バックエンド。Pueue CLIとデーモンが利用可能であることを想定。
-- **各種外部CLI**: 利用するサブコマンドに応じて `eza`、`fd`、`rg` などを使用。
-- **OS**: Linux / macOSを目標。互換性はSpikeと統合テストで確認予定。
+- **Pueue** は実行キュー、状態、ログ保持を担当。
+- **既存CLI** は探索、解析、ビルド、計測、プロファイリングを担当。
+- **axvern** は引数の検証、Policy、ツール選択、複数結果の統合、部分取得、比較レポートの整形を担当。
+- **Coding Agent** は得られた証拠から変更案を検討し、テストと再計測で検証します。
 
-> インストールコマンド、配布方法、必要バージョンは未確定です。公開・動作検証が済むまで、`cargo install` 等の導入方法は案内しません。
+コマンドの自動置換は既定で無効です。`find` / `fd` など、構文や挙動が異なるツールを無条件に変換しません。
 
-## 安全性と設計上の境界
+## Roadmap
 
-- `Allow / Ask / Deny` による実行前ポリシーを想定。ただし**OSレベルのサンドボックスではありません**。
-- Pueueへのコマンド登録に伴うシェル解釈は、実装前に引数・エスケープ方法を検証します。
-- 自動CLI置換は**既定で無効**。未知の引数や非互換なコマンドを勝手に変換しません。
-- `sd` 等による変更操作には、読み取り操作とは別の厳格なポリシーを適用します。
-- ログには秘密情報が含まれる可能性があります。保存範囲・アクセス権・保持期間はPueueの実態を踏まえて設計します。
-- `--dry-run`、LLM要約、独自プロセスマネージャー、Docker連携、RTK連携は初期スコープ外です。
+| Phase | Target | What axvern delivers |
+| --- | --- | --- |
+| **1 · Execute** | **v0.1** | Background commands with Pueue, task status, wait, history, basic execution guard |
+| **2 · Discover** | **v0.2** | Smart codebase commands composed from eza, fd, ripgrep, bat, tokei, ast-grep |
+| **3 · Retrieve** | **v0.3** | Temporary result storage, log query, selective extraction and recall without rerunning |
+| **4 · Optimize** | **v0.4+** | Benchmarking, baseline comparison, performance regression and bottleneck investigation |
 
-## ドキュメント
+```mermaid
+flowchart LR
+  P1[v0.1 Execute] --> P2[v0.2 Discover] --> P3[v0.3 Retrieve] --> P4[v0.4+ Optimize]
+```
 
-設計に関する正本は [`docs/`](docs/README.md) にまとめています。
+**Phase 1では`query`/`recall`を提供しない。Phase 2では高度なログ検索を前提にせず、既存CLIの結果を取得・表示する。** バージョンは実装予定であり、リリース済みを意味しない。詳しくは[ROADMAP](./docs/ROADMAP.md)を参照。
 
-| 文書 | 内容 |
-| --- | --- |
-| [Requirements](docs/REQUIREMENTS.md) | プロジェクトの目的・スコープ・非機能要件 |
-| [Functional Requirements](docs/FUNCTIONAL_REQUIREMENTS.md) | 機能別要件・要件ID |
-| [CLI Specification](docs/CLI_SPEC.md) | コマンド・引数・出力形式 |
-| [Architecture](docs/ARCHITECTURE.md) | Pueue連携とシステム境界 |
-| [Command Composition](docs/COMMAND_COMPOSITION.md) | **既存CLIの組み合わせによる機能実現方法** |
-| [Command Flows](docs/COMMAND_FLOWS.md) | サブコマンドと内部処理フロー |
-| [Roadmap](docs/ROADMAP.md) | v0.1〜v0.2の実装計画 |
-| [Verification](docs/VERIFICATION.md) | 受入条件・技術検証項目 |
-| [References](docs/REFERENCES.md) | 利用ツールと参考資料 |
+## Safety and measurement limitations
 
-## 開発方針
+- コマンド実行ポリシーはOSレベルのサンドボックスではありません。Pueueへの安全な引数受け渡しは事前検証が必要です。
+- 計測結果は実行環境、入力、キャッシュ、CPU負荷、ウォームアップなどの影響を受けます。異なる条件の計測値をそのまま改善率として扱いません。
+- ベンチマークは複数回コマンドを実行します。副作用を持つ処理には明示的な許可と隔離が必要です。
+- ログ・計測成果物には秘密情報が含まれ得るため、アクセス権・保存期間・機密情報の扱いを設計します。
+- axvernは最適化の効果を保証しません。改善の判定には正しさの検証と比較可能な計測データが必要です。
+- `--dry-run`、独自プロセスマネージャー、LLMによる自動変更、Docker必須化は初期スコープ外です。
 
-**Don't reinvent the command. Compose it.**
+## Requirements & documentation
 
-既存の優れたCLIが担当できる処理は再実装せず、axvernはそれらをCoding Agentが使いやすい形に接続することに集中します。
+設計文書は [`docs/README.md`](docs/README.md) を起点に整理しています。
 
-ライセンス、コントリビューション手順、リリース・インストール方法は決定後に追記します。
+- [Requirements](docs/REQUIREMENTS.md)
+- [Functional Requirements](docs/FUNCTIONAL_REQUIREMENTS.md)
+- [CLI Specification](docs/CLI_SPEC.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Command Composition](docs/COMMAND_COMPOSITION.md)
+- [Command Flows](docs/COMMAND_FLOWS.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Verification](docs/VERIFICATION.md)
+- [References](docs/REFERENCES.md)
+
+## Development status
+
+現在は**設計段階**です。インストール手順、対応OS、依存ツールの必要バージョン、配布方式、ライセンスは決定・検証後に追記します。
+
+**Don't reinvent the command. Compose it. Measure the result.**

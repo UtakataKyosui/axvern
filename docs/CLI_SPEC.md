@@ -2,6 +2,18 @@
 
 > 出典: 2026-10-13時点の統合版 `REQUIREMENTS.md`。要件ID・受入条件IDは維持。
 
+## 導入フェーズ別コマンド一覧（計画）
+
+| フェーズ | 主なコマンド | 裏側の既存CLI |
+| --- | --- | --- |
+| v0.1 | `run`, `status`, `wait`, `history`, `policy check`, `doctor` | pueue |
+| v0.2 | `fs list/find/search/read/analyze`, `code search/stats` | eza, fd, rg, bat, tokei, ast-grep |
+| v0.2 任意 | `code diff`, `system disk-usage`, `system processes` | git + delta, dust, procs |
+| v0.3 | `query`, `recall`, `logs`（仮） | Pueueログと必要に応じたaxvernインデックス |
+| v0.4+ | `bench run`, `bench compare`, `profile`（仮） | hyperfine, samply, flamegraph等 |
+
+下記の従来型「コマンド一覧」は全フェーズを通じた**予定構文**であり、v0.1ですべてが利用できるという意味ではない。
+
 ## 5. CLIインターフェース（提案）
 
 | コマンド | 概要 |
@@ -20,14 +32,14 @@
 | `axvern fs list [path] [--all]` | ezaで一覧を非同期取得 |
 | `axvern fs find <pattern> [path] [--hidden] [--no-ignore]` | fdでファイル探索を非同期取得 |
 | `axvern fs search <pattern> [path] [--hidden] [--no-ignore]` | rgでテキスト検索を非同期取得 |
-| `axvern fs read <file> --from-line 1 --lines 80` | batで部分閲覧（Should） |
-| `axvern code search --pattern <ast-pattern> [path]` | ast-grepで構造検索（Should） |
-| `axvern fs analyze <path> [--max-depth 3] [--format json]` | tokei + eza + fdの統合分析（v0.2 Must） |
-| `axvern code stats [path]` | tokeiで統計を取得（v0.2 Should） |
-| `axvern system disk-usage [path]` | dustで容量上位項目を取得（v0.2 Should） |
-| `axvern system processes [--match <text>]` | procsでプロセスを検索（v0.2 Should） |
-| `axvern code diff [--staged]` | git + deltaで差分を取得（v0.2 Should） |
-| `axvern text replace <pattern> <replacement> <path>` | sdによる変更操作（v0.2 Could、明示承認要） |
+| `axvern fs read <file> --from-line 1 --lines 80` | batで部分閲覧（v0.2） |
+| `axvern code search --pattern <ast-pattern> [path]` | ast-grepで構造検索（v0.2） |
+| `axvern fs analyze <path> [--max-depth 3] [--format json]` | tokei + eza + fdの統合分析（v0.2） |
+| `axvern code stats [path]` | tokeiで統計を取得（v0.2任意） |
+| `axvern system disk-usage [path]` | dustで容量上位項目を取得（v0.2任意） |
+| `axvern system processes [--match <text>]` | procsでプロセスを検索（v0.2任意） |
+| `axvern code diff [--staged]` | git + deltaで差分を取得（v0.2任意） |
+| `axvern text replace <pattern> <replacement> <path>` | sdによる変更操作（将来候補、明示承認要） |
 
 原則として`--`以降をaxvernの引数から分離する。ただしPueueへの引数渡しの互換性はSpike完了まで確定としない。`query`にはデフォルトの返却サイズ上限を設けるが、`recall`は明示的な全量取得操作であるため、大量出力に関する警告やファイル出力手段を設計する。
 

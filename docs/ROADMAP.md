@@ -1,114 +1,85 @@
-# v0.1〜v0.2 実装ロードマップ
+# axvern ロードマップ：実行 → 調査 → 結果活用 → 性能最適化
 
-> 出典: 2026-10-13時点の統合版 `REQUIREMENTS.md`。要件ID・受入条件IDは維持。
+> この文書はリリース順序の正本。v0.3・v0.4は計画上の目標で、実装済みではない。従来のM0〜M8計画は、この4フェーズに置き換える。
 
-## 10. v0.1〜v0.2 コマンド実装計画
+## フェーズとリリースゲート
 
-この章はリリース計画であり、`FUNCTIONAL_REQUIREMENTS.md` の機能要件および `VERIFICATION.md` の受入条件と併せて利用する。`v0.2`への候補は**必ず実装するという保証ではなく**、下記の受入条件を満たしたものだけを公開する。両バージョンを通じて、Pueueは非同期実行・ログ保持、axvernは制御・クエリ・薄いAdapterに徹する。
-
-### 10.1 マイルストーンと完了ゲート
-
-| 段階 | リリース目標 | 実装するもの | 完了条件 |
-| --- | --- | --- | --- |
-| M0 | v0.1着手前 | Pueue引数・ID・ログ・終了状態のSpike、CLI置換の互換性検証 | `VERIFICATION.md` のSpikeで挙げた阻害的な不確実性を解消し、使えない経路を明示 |
-| M1 | v0.1 | `run` / `status` / `wait` / `history`、実行ID対応付け | 1回だけ安全に登録・状態照会でき、他人のPueueタスクと混同しない |
-| M2 | v0.1 | `query` / `recall`、部分抽出、結果件数・サイズ制限 | コマンドを再実行せず部分抽出でき、ログ消失を区別できる |
-| M3 | v0.1 | `policy check` / `doctor`、最小限の自動置換（opt-in） | Deny/Askが実行前に有効、未確認の置換は起こらない |
-| M4 | v0.1 | `fs list` / `fs find` / `fs search` | eza/fd/rgが既存のPolicy・Pueue・Queryを経由する |
-| M5 | v0.1候補 | `fs read` / `code search`（Should） | Spike・受入条件を通過した場合のみ追加。未完成でもv0.1 Must要件を妨げない |
-| M6 | v0.2 | `fs analyze` / `code stats` / `system disk-usage` / `system processes` / `code diff` | `fs analyze`のツール統合と各ツールの非対話出力・結果抽出・失敗処理・依存不足を検証 |
-| M7 | v0.2候補 | `text replace`（sd） | ファイル変更の副作用を明示し、Ask/Denyと変更内容の検証が通った場合のみ公開 |
-| M8 | v0.2リリース | 回帰・互換性・セキュリティ試験、Docs更新 | v0.1の契約を維持し、全公開コマンドの受入テストが通る |
-
-### 10.2 v0.1 コマンド別実装計画
-
-| CLI | 委譲先 | 実装単位 | 最低限の受入条件 |
-| --- | --- | --- | --- |
-| `axvern run -- ...` | Pueue | 引数処理、ポリシー評価、タスク登録・ID記録 | 空白・Unicode・メタ文字を安全に処理し、登録が1回だけ |
-| `axvern status <id>` | Pueue | ID解決、状態正規化 | queued/running/done/failed/unknownを区別 |
-| `axvern wait <id>` | Pueue | ポーリング・タイムアウト | waitタイムアウトは子タスクを勝手に停止しない |
-| `axvern history` | ローカルID対応情報＋Pueue | 管理対象のみ一覧 | 別ツールが登録したタスクを混ぜない |
-| `axvern query <id>` | Pueueログ | match/errors/tail/行範囲、件数制限 | 元のタスクを再実行せず、行番号と不完全ログを明示 |
-| `axvern recall <id>` | Pueueログ | 全量明示取得 | 生ログを利用可能な範囲で正確に返す。消失時は明示エラー |
-| `axvern policy check -- ...` | axvern | Allow/Ask/Denyを副作用なく判定 | コマンドを登録・実行しない |
-| `axvern doctor` | axvern＋依存CLI | デーモン・設定・依存コマンド診断 | Pass/Warning/Failと修復方法、JSON出力 |
-| `axvern fs list [path]` | eza | パス・一覧フラグの明示マッピング | 色/ページャ無効、結果は実行IDから取得可 |
-| `axvern fs find <pattern> [path]` | fd | パターン・hidden・ignoreを明示マッピング | fd固有のignore挙動を仕様通りに扱う |
-| `axvern fs search <pattern> [path]` | rg | 検索パターン・hidden・ignoreを明示マッピング | 一致なしと実行エラーを識別し、抽出可能 |
-| `axvern fs read <file>`（Should） | bat | 行範囲指定と非対話閲覧 | 指定範囲、行番号、ページャ制御を検証 |
-| `axvern code search ...`（Should） | ast-grep | パターン・言語・パスの指定 | 構文エラーと一致なしを区別 |
-
-**コマンドの公開規則**：内部コマンドをそのまま露出せず、用途と引数意味が一意に定義できる薄いAdapterを実装する。置換後も元コマンドと実コマンドの双方をPolicyに通す。自動置換はデフォルト無効のままとし、`ls`等の検証済み形式だけを許可する。`find`→`fd`、`grep`→`rg`、`cat`→`bat`の無条件置換はしない。
-
-### 10.3 v0.2 コマンド別実装計画
-
-| CLI案 | ツール | 用途・実装範囲 | 受入条件 | 優先度 |
+| フェーズ | リリース目標 | 目的 | 必須コマンド・機能 | 完了ゲート |
 | --- | --- | --- | --- | --- |
-| `axvern fs analyze <path>` | tokei + eza + fd | 言語統計・制限付きツリー・構成ファイル発見を統合し、分析IDから再参照 | JSONスキーマ、親子実行ID、部分失敗、走査上限、リンク挙動をテスト | Must |
-| `axvern code stats [path]` | tokei | 言語別ファイル数・コード行数・コメント数の取得 | 集計対象・除外規則を明示し、非対話で安定して解析できる | Should |
-| `axvern system disk-usage [path]` | dust | 指定パス配下の容量上位項目を表示 | 単位・アクセス不可・シンボリックリンクの扱いを明示し、出力上限を設ける | Should |
-| `axvern system processes [--match <text>]` | procs | プロセスのスナップショットと絞り込み | 一時点の情報であると明示し、権限不足や列形式の違いを扱う | Should |
-| `axvern code diff [--staged]` | git + delta | Git差分の読みやすい表示（deltaは表示専用） | Gitの終了状態・差分意味を維持し、カラーなしで抽出可能 | Should |
-| `axvern text replace <pattern> <replacement> <path>` | sd | **明示的な**ファイル変更操作 | 書込み前Policy判定、非対話Askの拒否、対象ファイル・変更件数の把握を必須とする | Could |
+| Phase 1 | v0.1 | Pueueによる非同期コマンド実行 | `run`, `status`, `wait`, `history`, `doctor`、実行ID対応、最低限のPolicy | 1回だけタスク登録でき、状態・終了コードを参照できる。安全な引数処理と失敗判定が成立する |
+| Phase 2 | v0.2 | スマートなコードベース調査 | `fs list/find/search/read/analyze`, `code search/stats`、Modern CLI Adapter | eza/fd/rg/bat/tokei/ast-grepを用途別に組合せ、構造化結果と依存不足を扱える |
+| Phase 3 | v0.3 | 出力の一時保存・選択的検索 | `query`, `recall`, `logs`（名称案）、取得範囲・ログ欠損・保持戦略 | **元コマンドを再実行せず**部分抽出できる。ログ消失を誤魔化さない |
+| Phase 4 | v0.4以降 | 計測・比較・ボトルネック分析 | `bench run`, `bench compare`, `profile`（名称案） | 再現可能な計測条件、ベースライン、比較結果と根拠を提示できる |
 
-v0.2でも`sed`の自動置換や`rm`の代替による暗黙の削除は実装しない。`text replace`は変更を伴うため、単なる読み取り操作として扱わない。`zoxide`（シェル状態）、`bottom`（TUI）、`hyperfine`（反復実行）、`xh`（通信）、`rip`（削除）はv0.2の範囲外とする。
-
-### 10.4 共通実装タスクと依存関係
+## 依存関係
 
 ```mermaid
 flowchart TD
-    S[Spike: PueueとCLI互換性] --> P[Pueue Adapter / ID対応]
-    P --> Q[Result Query / Recall]
-    P --> G[Policy / Doctor]
-    G --> F[fs list / find / search]
-    Q --> F
-    F --> V1[v0.1 Must受入]
-    F --> R[fs read / code search: Should]
-    V1 --> A[fs analyze: tokei・eza・fd統合]
-    A --> V2[統計・容量・プロセス・差分Adapter]
-    V2 --> W[書込み操作の追加検証]
-    W --> REL[v0.2リリース判定]
+  S[Spike: Pueue CLI / 引数 / JSON / daemon] --> P1[Phase 1: run・status・wait・history]
+  P1 --> P2[Phase 2: Modern CLI Adapters / Codebase Discovery]
+  P2 --> P3[Phase 3: Result Store / Query / Recall]
+  P3 --> P4[Phase 4: Measure / Compare / Profile]
+  P1 -.-> I[共通Execution ID・Task metadata]
+  I -.-> P2
+  I -.-> P3
+  P2 -.-> R[機械可読な調査結果]
+  R -.-> P4
 ```
 
-実装時は、①コマンドごとに引数マッピングを定義、②ポリシー判定、③Pueueへ一度だけ投入、④状態/ログを抽出、⑤機械可読な応答をテスト、の共通チェックを使う。**アダプターのために独自の実行デーモンや新しいタスクランナーを作らない**。
+## Phase 1 / v0.1：実行管理
 
-### 10.5 バージョン別受入ゲート
+1. Pueueのデーモン起動・接続、タスク登録、ID取得、状態取得の挙動をSpikeで確認する。
+2. `ExecutionPlan`、`PueueAdapter`、axvern固有の`execution_id`とPueue IDの対応を実装する。
+3. `run`, `status`, `wait`, `history`を完成させる。実行は非同期で、`wait`の時間切れでジョブを停止しない。
+4. `doctor`でデーモン・設定・権限を調べられるようにする。`policy check`とAllow/Ask/Denyを最低限の実行ガードとして導入する。
+5. 実行IDとタスクの終了情報は安定したJSONで返す。ただし**独自の検索インデックス、行単位クエリは作らない**。
 
-- **v0.1 Must**：AC-01〜AC-22のうちMust要件に対応するケースがすべて通過。AC-23/24（Should）は未実装を許容。既存CLIへの自動置換はopt-inのみ。
-- **v0.1 推奨**：`fs read`・`code search`を実装した場合はAC-23/24を必ず通す。
-- **v0.2**：`fs analyze`（Must）および`code stats`、`system disk-usage`、`system processes`、`code diff`の各公開コマンドに、正常系・一致/対象なし・依存ツール不足・権限エラー・大量出力・Policy拒否のテストを追加する。書込み系`text replace`は要件を満たせないなら延期する。
-- **共通ゲート**：Pueueへ二重登録しない、終了理由を正しく表示する、ログ削除後に存在するかのように扱わない、機密情報を不用意に表示しない、macOS/Linuxで非対話実行を検証する。
+**受入対象**：AC-01〜07、AC-13〜15、AC-05/06と安全な実行に必要な設定検証。ログの簡易参照はPueueに直接委譲可能だが、`query`/`recall`は必須にしない。
 
-### 10.6 `fs analyze` 実装タスク（v0.2）
+## Phase 2 / v0.2：コードベース調査
 
-1. `tokei --output json <path>` の対応バージョン・失敗時挙動・無対象時のJSONを検証し、言語集計を型付きデータへ変換する。
-2. `eza --tree --level <N> <path>` を色なし・非対話で実行し、表示最大行数を制御する。
-3. `fd`による設定ファイル探索対象と除外条件を固定し、パス情報を正規化する。
-4. `fs analyze`の親分析IDと3つのPueue子タスクIDを関連付ける。各タスクに同一パス・時刻情報・Policy結果を記録する。
-5. 各部分結果を統合してテキスト概要とJSONを生成する。失敗した子処理は隠さずwarningsに含める。
-6. 最小fixture（Rustのみ、TSのみ、混在、空、シンボリックリンク、アクセス拒否）で受入テストを行う。
+1. `fs list`（eza）、`fs find`（fd）、`fs search`（rg）、`fs read`（bat）を薄いAdapterとして実装する。
+2. `code search`（ast-grep）、`code stats`（tokei）を追加し、非対話出力と機械可読形式を統一する。
+3. `fs analyze`は **eza（制限付きツリー）+ fd（設定ファイル検出）+ tokei（言語統計）** の合成とする。実行IDの親子対応を保持し、部分失敗を明示する。
+4. `system disk-usage`（dust）、`system processes`（procs）、`code diff`（git + delta）は任意の追加機能とし、Phase 2の必須ゲートを妨げない。
+5. 自動置換は限定的・明示的opt-inのみ。全引数互換を装って`find`を`fd`へ置換しない。
 
-#### 追加受入条件
+**受入対象**：AC-16〜24、AC-27〜32（該当公開機能について）。Phase 3前は分析結果を独自検索できると主張しない。Pueueの標準ログ保持に依存する。
 
-| ID | シナリオ | 期待結果 |
-| --- | --- | --- |
-| AC-27 | Rust / TypeScript混在パス | 言語別統計・ツリー・主要設定ファイルを1結果に集約する |
-| AC-28 | `--max-depth 2` | ツリーが2階層に限定され、統計の集計範囲と混同されない |
-| AC-29 | 設定ファイルが存在しない | `manifests`が空であり、架空の技術スタックを推定しない |
-| AC-30 | 子コマンドの一部が失敗 | 成功した部分は表示し、失敗箇所を警告と終了状態で区別する |
-| AC-31 | 同じ分析IDで再取得 | 再走査せずに保存済みの結果を取得できる（Pueue側にログが残っている範囲） |
-| AC-32 | シンボリックリンク・大量ツリー | リンクを無限追跡せず、件数・深さ制限を守る |
+## Phase 3 / v0.3：結果の再利用
 
+1. Pueueのログ保存／削除の実態を確定し、axvernの一時保存・参照方式を設計する（Pueueログ利用を第一候補とする）。
+2. `query`に`--match`, `--errors`, `--tail`, `--from-line`, `--lines`を追加し、抽出位置・省略件数を返す。
+3. `recall`で利用可能な元ログを回収。ログ消失・部分ログ・サイズ上限を区別する。
+4. 必要に応じてメタデータ／検索用インデックスを追加。独自コピーを作る場合はTTL・容量・秘密情報保護を要件化する。
 
-## 11. 将来拡張（v0.2対象外）
+**受入対象**：AC-08〜12、AC-31の「再取得」保証はこの段階から正式対象。Phase 2の調査実行を再実行せず問い合わせられることを検証する。
 
-- Coding Agent Hooks/Adapters（Claude Code、Codexなど）
-- 任意Docker/Dev Container Runtime
-- OpenTelemetryによる実行時間、ログ抽出率、失敗率の計測
-- 保存ログの高度なインデックス、意味検索
-- axvern独自の明示的なログアーカイブ機能（Pueueログの保持期間を超える保存）
-- タスクキャンセル、キュー優先順位、グループ操作などの高度な管理UI
-- v0.2以降のツール追加・高度な集約（`bat`・`ast-grep`はv0.1 Should、`tokei`・`dust`・`procs`・`delta`はv0.2で評価）
-- 任意のシェルコマンドの完全な解析・自動書換え
+## Phase 4 / v0.4+：性能計測と改善検証
 
+1. `hyperfine`を利用したベンチマークをSpikeで検証する。コマンドの反復実行に副作用がないことを前提条件とする。
+2. `bench run`：ウォームアップ、反復回数、環境、対象リビジョンを記録し、計測結果をJSON化する。
+3. `bench compare`：前後の分布・変動・環境差を考慮し、差分と不確実性を示す。単一の経過時間だけで改善を断言しない。
+4. `profile`：`samply`・`flamegraph`、ビルドツール固有のタイミング解析等を候補とし、OS対応・権限・計測負荷を確認する。
+5. Agentが「分析→変更→再計測→比較」を行うための出力契約を定める。**axvern自身がコードを自動修正することは必須ではない**。
 
+```mermaid
+flowchart LR
+  B[Baseline] --> M[Measure]
+  M --> A[Analyze bottleneck]
+  A --> C[Agent changes code]
+  C --> R[Re-measure]
+  R --> V{Regression / improvement?}
+  V -->|Improved & tests pass| K[Record evidence]
+  V -->|Uncertain / worse| A
+```
+
+## 旧計画からの変更と互換性
+
+- 従来の **v0.1 `query`/`recall`必須 → v0.3** に延期する。
+- 従来の **v0.1 `fs`操作 → v0.2** に移動する。
+- 従来の **v0.2 `fs analyze` → v0.2** を維持する。
+- `code stats` / `code search` をv0.2の基本機能に整理する。
+- `text replace`（sd）のような書込み系機能はv0.2の必須要件から除外し、セキュリティ検証後の別途計画とする。
+- `hyperfine`・プロファイラによる性能検証はv0.4以降。計測だけでなく比較・根拠を重視する。
+- `FR-*`・`AC-*`の識別子は維持し、**導入フェーズ**を変更する。
