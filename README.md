@@ -143,7 +143,7 @@ flowchart LR
   P1[v0.1 Execute] --> P2[v0.2 Discover] --> P3[v0.3 Retrieve] --> P4[v0.4+ Optimize]
 ```
 
-**Phase 1では`query`/`recall`を提供しない。Phase 2では高度なログ検索を前提にせず、既存CLIの結果を取得・表示する。** バージョンは実装予定であり、リリース済みを意味しない。詳しくは[ROADMAP](./docs/ROADMAP.md)を参照。
+**Phase 1では`query`/`recall`を提供しない。Phase 2では高度なログ検索を前提にせず、既存CLIの結果を取得・表示する。** バージョンは実装予定であり、リリース済みを意味しない。詳しくは[Milestones](https://github.com/UtakataKyosui/axvern/milestones)を参照。
 
 ## Safety and measurement limitations
 
@@ -156,17 +156,15 @@ flowchart LR
 
 ## Requirements & documentation
 
-設計文書は [`docs/README.md`](docs/README.md) を起点に整理しています。
+要件定義・設計・受入条件・未決事項はGitHub Issueを正本として管理しています。
+既存の設計文書の本文もIssueへ移管しました。
 
-- [Requirements](docs/REQUIREMENTS.md)
-- [Functional Requirements](docs/FUNCTIONAL_REQUIREMENTS.md)
-- [CLI Specification](docs/CLI_SPEC.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Command Composition](docs/COMMAND_COMPOSITION.md)
-- [Command Flows](docs/COMMAND_FLOWS.md)
-- [Roadmap](docs/ROADMAP.md)
-- [Verification](docs/VERIFICATION.md)
-- [References](docs/REFERENCES.md)
+- [設計文書の移管先](https://github.com/UtakataKyosui/axvern/issues/5)
+- [サブコマンドの要件定義Issue](https://github.com/UtakataKyosui/axvern/issues?q=is%3Aissue%20label%3Adesign)
+- [共通CLI契約・結果取得・設定](https://github.com/UtakataKyosui/axvern/issues/34)
+- [クレート選定の提案](https://github.com/UtakataKyosui/axvern/issues/7)
+
+`sites`は実装・検証済み機能の公開ドキュメントを作成するプロジェクトです。
 
 ## Development status
 
