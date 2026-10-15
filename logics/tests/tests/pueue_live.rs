@@ -237,3 +237,289 @@ fn isolated_registration_wait_cwd_argv_expiry_and_receipt_recovery() {
         ErrorCode::DaemonUnavailable
     );
 }
+
+fn public_cli(q: &Queue, config: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(std::env::var_os("AXVERN_TEST_BIN").expect("use moon run qualities:test"))
+        .current_dir(q._temp.path())
+        .env_remove("AXVERN_CONFIG")
+        .arg("--config")
+        .arg(config)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+fn cli_json(q: &Queue, config: &std::path::Path, args: &[&str], code: i32) -> serde_json::Value {
+    let out = public_cli(q, config, args);
+    assert_eq!(
+        out.status.code(),
+        Some(code),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stderr.is_empty(), "JSON diagnostics leaked to stderr");
+    serde_json::from_slice(&out.stdout).expect("one JSON response, no diagnostics")
+}
+#[test]
+fn public_cli_execute_doctor_and_history_contracts() {
+    let mut q = Queue::new();
+    let config = q._temp.path().join("axvern.toml");
+    let store_path = q._temp.path().join("cli-store");
+    let text = format!(
+        "schema_version=1\n[execution]\npueue_config={}\nstore={}\n[[policy.rules]]\nid='python'\neffect='allow'\ncommand='python3'\n[[policy.rules]]\nid='deny'\neffect='deny'\ncommand='false'\n",
+        serde_json::to_string(&q.adapter.config).unwrap(),
+        serde_json::to_string(&store_path).unwrap()
+    );
+    fs::write(&config, &text).unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    let before = q.adapter.list().unwrap();
+    let report = cli_json(&q, &config, &["doctor", "--format", "json"], 0);
+    assert_eq!(report["output"]["level"], "warning"); // no owned logs yet
+    assert_eq!(q.adapter.list().unwrap(), before);
+    assert!(
+        !fs::read_dir(&store_path).unwrap().any(|e| e
+            .unwrap()
+            .path()
+            .extension()
+            .is_some_and(|e| e == "probe"))
+    );
+    // No registration on Deny or noninteractive Ask, including the default shell denial.
+    for program in ["false", "true", "sh"] {
+        let denied = cli_json(&q, &config, &["run", "--format", "json", "--", program], 9);
+        assert_eq!(denied["error"]["code"], "policy_denied");
+    }
+    assert_eq!(q.adapter.list().unwrap(), before);
+    let human = public_cli(&q, &config, &["run", "--", "false"]);
+    assert_eq!(human.stdout, b"");
+    assert_eq!(
+        human.stderr,
+        b"PolicyDenied: policy or approval refused registration\n"
+    );
+    let unknown = "ex_550e8400-e29b-41d4-a716-446655440000";
+    let unknown_json = cli_json(&q, &config, &["status", unknown, "--format", "json"], 7);
+    assert_eq!(
+        unknown_json,
+        serde_json::json!({"schema_version":1,"execution_id":unknown,"state":null,"exit_code":null,"output":null,"error":{"code":"task_not_found","message":"unknown axvern execution"}})
+    );
+    for args in [
+        vec!["history", "--limit", "0", "--format", "json"],
+        vec!["history", "--limit", "1001", "--format", "json"],
+        vec!["wait", unknown, "--timeout", "0s", "--format", "json"],
+        vec!["wait", unknown, "--timeout", "-1s", "--format", "json"],
+        vec!["run", "--format", "json"],
+        vec!["history", "--cwd", "/", "--format", "json"],
+    ] {
+        assert_eq!(
+            cli_json(&q, &config, &args, 2)["error"]["code"],
+            "invalid_input"
+        );
+    }
+    // argv region includes strings that look like axvern flags; no re-parsing.
+    let args = [
+        "",
+        "a b",
+        "'\"",
+        "line\nbreak",
+        "$(touch CLI_INJECTED)",
+        ";touch CLI_INJECTED",
+        "日本語",
+        "--format",
+        "json",
+    ];
+    let code = "import sys,json,os,time\ndeadline=time.monotonic()+15\nwhile not os.path.exists('CLI_RELEASE') and time.monotonic()<deadline: time.sleep(0.02)\nprint(json.dumps([os.getcwd(),sys.argv[1:]]))";
+    let mut argv = vec![
+        "run",
+        "--format",
+        "json",
+        "--cwd",
+        q._temp.path().to_str().unwrap(),
+        "--",
+        "python3",
+        "-c",
+        code,
+    ];
+    argv.extend(args);
+    let registered = cli_json(&q, &config, &argv, 0);
+    let id = registered["execution_id"].as_str().unwrap();
+    let record: ExecutionRecord =
+        serde_json::from_value(registered["output"]["record"].clone()).unwrap();
+    assert!(
+        matches!(
+            q.adapter.inspect(record.backend.task_id).unwrap().state,
+            ChildState::Queued | ChildState::Running
+        ),
+        "run waited for completion"
+    );
+    let status = cli_json(&q, &config, &["status", id, "--format", "json"], 0);
+    assert!(status["state"] == "running" || status["state"] == "queued");
+    let timeout = cli_json(
+        &q,
+        &config,
+        &["wait", id, "--timeout", "1ms", "--format", "json"],
+        124,
+    );
+    assert_eq!(timeout["error"]["code"], "timeout");
+    fs::write(q._temp.path().join("CLI_RELEASE"), b"finish").unwrap();
+    let done = cli_json(
+        &q,
+        &config,
+        &["wait", id, "--timeout", "10s", "--format", "json"],
+        0,
+    );
+    assert_eq!(done["state"], "done");
+    assert_eq!(done["exit_code"], 0);
+    assert!(done["output"]["task"]["started_at"].is_string());
+    assert!(done["output"]["task"]["finished_at"].is_string());
+    let raw = q.adapter.output(record.backend.task_id, 10000).unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!([q._temp.path().to_str().unwrap(), args])
+    );
+    assert!(!q._temp.path().join("CLI_INJECTED").exists());
+    // External tasks do not appear in history. Child failure is data in status,
+    // but wait has a stable wrapper exit=10 and retains the child's exit=23.
+    let external = q.plan("print('external')", &[]);
+    q.adapter.register_identified(&external).unwrap();
+    let failed = cli_json(
+        &q,
+        &config,
+        &[
+            "run",
+            "--format",
+            "json",
+            "--",
+            "python3",
+            "-c",
+            "raise SystemExit(23)",
+        ],
+        0,
+    );
+    let failed_id = failed["execution_id"].as_str().unwrap();
+    let waited = cli_json(&q, &config, &["wait", failed_id, "--format", "json"], 10);
+    assert_eq!(waited["exit_code"], 23);
+    assert_eq!(
+        cli_json(&q, &config, &["status", failed_id, "--format", "json"], 0)["state"],
+        "failed"
+    );
+    let history = cli_json(&q, &config, &["history", "--format", "json"], 0);
+    assert_eq!(history["output"]["executions"].as_array().unwrap().len(), 2);
+    let limited = cli_json(
+        &q,
+        &config,
+        &["history", "--limit", "1", "--format", "json"],
+        0,
+    );
+    assert_eq!(
+        limited["output"]["executions"][0],
+        history["output"]["executions"][0]
+    );
+    // Doctor leaves even abandoned writer scratch untouched.
+    let pending = store_path.join("untouched.pending");
+    fs::write(&pending, b"keep").unwrap();
+    fs::set_permissions(&pending, fs::Permissions::from_mode(0o600)).unwrap();
+    let before = q.adapter.list().unwrap();
+    let report = cli_json(&q, &config, &["doctor", "--format", "json"], 0);
+    assert_eq!(report["output"]["level"], "pass");
+    assert_eq!(fs::read(&pending).unwrap(), b"keep");
+    assert_eq!(q.adapter.list().unwrap(), before);
+    fs::remove_file(pending).unwrap();
+    q.client(&["clean"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !q.adapter.list().unwrap().is_empty() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        cli_json(&q, &config, &["status", id, "--format", "json"], 8)["error"]["code"],
+        "expired"
+    );
+    assert_eq!(
+        cli_json(&q, &config, &["history", "--format", "json"], 0)["output"]["executions"][0]["error"]
+            ["code"],
+        "expired"
+    );
+    q.client(&["shutdown"]);
+    q.daemon.wait().unwrap();
+    let offline = cli_json(&q, &config, &["doctor", "--format", "json"], 12);
+    let checks = offline["output"]["checks"].as_array().unwrap();
+    let daemon = checks.iter().find(|c| c["name"] == "pueue_daemon").unwrap();
+    assert_eq!(daemon["level"], "fail");
+    assert!(
+        daemon["remedy"]
+            .as_str()
+            .unwrap()
+            .contains("start pueued --config")
+    );
+    let human = public_cli(&q, &config, &["doctor"]);
+    assert_eq!(human.status.code(), Some(12));
+    assert!(String::from_utf8_lossy(&human.stdout).contains("pueue_daemon: fail"));
+    assert!(String::from_utf8_lossy(&human.stdout).contains("start pueued --config"));
+    assert!(human.stderr.is_empty());
+    let offline_history = cli_json(&q, &config, &["history", "--format", "json"], 11);
+    assert_eq!(offline_history["error"]["code"], "partial_result");
+    assert_eq!(
+        offline_history["output"]["executions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn terminal_ask_requires_an_explicit_yes() {
+    let q = Queue::new();
+    let config = q._temp.path().join("ask.toml");
+    fs::write(
+        &config,
+        format!(
+            "schema_version=1\n[execution]\npueue_config={}\nstore={}\n",
+            serde_json::to_string(&q.adapter.config).unwrap(),
+            serde_json::to_string(&q._temp.path().join("store")).unwrap()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    for (answer, code, count) in [("no", 9, 0), ("yes", 0, 1)] {
+        let out = Command::new("python3")
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/cli/approve.py"))
+            .arg(answer)
+            .arg(std::env::var_os("AXVERN_TEST_BIN").expect("use moon run qualities:test"))
+            .args([
+                "--config",
+                config.to_str().unwrap(),
+                "run",
+                "--format",
+                "json",
+                "--",
+                "true",
+            ])
+            .current_dir(q._temp.path())
+            .env_remove("AXVERN_CONFIG")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["exit"], code);
+        assert!(
+            value["prompt"]
+                .as_str()
+                .unwrap()
+                .starts_with("Policy asks for approval.")
+        );
+        let response: serde_json::Value =
+            serde_json::from_str(value["stdout"].as_str().unwrap()).unwrap();
+        if code == 0 {
+            assert!(response["execution_id"].is_string());
+        } else {
+            assert_eq!(response["error"]["code"], "policy_denied");
+        }
+        assert_eq!(q.adapter.list().unwrap().len(), count);
+    }
+}

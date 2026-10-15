@@ -45,7 +45,9 @@ struct Document {
 }
 impl ExecutionStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, Error> {
-        let root = root.into();
+        Self::open_internal(root.into(), true)
+    }
+    fn open_internal(root: PathBuf, recover: bool) -> Result<Self, Error> {
         if !root.is_absolute() {
             return Err(Error::new(
                 ErrorCode::InvalidInput,
@@ -77,12 +79,45 @@ impl ExecutionStore {
         // A killed writer can leave only unpublished scratch, never a partial record.
         for entry in io(fs::read_dir(&store.root))? {
             let path = io(entry)?.path();
-            if path.extension().is_some_and(|v| v == "pending") {
+            if recover && path.extension().is_some_and(|v| v == "pending") {
                 secure(&path, false)?;
                 io(fs::remove_file(path))?;
             }
         }
         Ok(store)
+    }
+    /// Dedicated scratch only; no record or abandoned writer scratch is changed.
+    pub fn diagnose(root: PathBuf) -> Result<(), Error> {
+        let store = Self::open_internal(root, false)?;
+        let _lock = store.lock()?;
+        store.records()?;
+        let path = store
+            .root
+            .join(format!(".doctor-{}.probe", Self::allocate_id()?));
+        let result = (|| {
+            let mut file = io(OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path))?;
+            io(file.write_all(b"axvern probe"))?;
+            io(file.sync_all())?;
+            use std::io::{Seek, SeekFrom};
+            io(file.seek(SeekFrom::Start(0)))?;
+            let mut bytes = Vec::new();
+            io(file.read_to_end(&mut bytes))?;
+            if bytes != b"axvern probe" {
+                return Err(fail());
+            }
+            Ok(())
+        })();
+        // Always attempt cleanup, including failed I/O. Report cleanup failures too.
+        let cleanup = io(fs::remove_file(&path));
+        result.and(cleanup)
+    }
+    pub(crate) fn diagnostic_history(root: PathBuf) -> Result<Vec<ExecutionRecord>, Error> {
+        Self::open_internal(root, false)?.history()
     }
     fn lock(&self) -> Result<File, Error> {
         secure(&self.root, true)?;

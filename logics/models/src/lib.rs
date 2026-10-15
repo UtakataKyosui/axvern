@@ -186,6 +186,32 @@ pub struct ExecutionRecord {
     pub registered_at: u64,
     pub cwd: String,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExecutionView {
+    pub record: ExecutionRecord,
+    pub task: Option<TaskSnapshot>,
+    /// Backend lookup failure retains local metadata, including an expired mapping.
+    pub error: Option<Error>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckLevel {
+    Pass,
+    Warning,
+    Fail,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub name: String,
+    pub level: CheckLevel,
+    pub message: String,
+    pub remedy: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DoctorReport {
+    pub level: CheckLevel,
+    pub checks: Vec<Diagnostic>,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Error {
     pub code: ErrorCode,

@@ -1,4 +1,14 @@
-品質保証のために使用しているコマンドやCLI設定ファイルの置き所
+# Quality gates
+
+`devbox run test` invokes Moon's `qualities:verify` and `qualities:pueue-spike`.
+Rust tests receive the built public CLI through `AXVERN_TEST_BIN`; use the Moon runner rather than bare Cargo tests for CLI integration coverage.
+
+- `verify`: Rust fmt/check/Clippy/build/tests; site check/build; local docs links; release build/install smoke.
+- `pueue-spike`: isolated Pueue 4.0.4 contract probes, evidence in `target/pueue-spike.json`.
+- `links`: local Markdown/MDX links and JSON navigation links resolve; no network dependency.
+- `release-smoke`: release build, install into a temporary root, executable name/version/help checks; writes `target/release-evidence.json`.
+- CI records its console transcript in `target/quality.log` and uploads evidence on both Ubuntu and macOS. No publishing step exists.
+
 ## CIの実行範囲とキャッシュ
 
 PRはそのPRのベースからの差分、mainへのpushは直前のコミットからの差分で判定する。

@@ -1,0 +1,13 @@
+# Architecture and limitations
+
+The dependency direction is `tools/cli → logics/core → logics/models`. Models define shared IDs, errors, snapshots and diagnostic results. Core owns configuration, policy, Pueue I/O, persistence, execution services and doctor. CLI parses argv, collects terminal approval, renders output and selects process exits. `logics/tests` contains contract/integration fixtures. Moon coordinates Cargo and the Rspress site; quality scripts live under `qualities`.
+
+Pueue 4.0.4 performs actual background execution. axvern invokes its CLI with separated argv and `add --escape`; it does not pass target argv to a local shell. This is verified with Pueue's POSIX `sh -c` daemon shell. Arbitrary daemon shell customizations are unsupported. Pueue can still execute any approved program with your user privileges; axvern does not sandbox target programs or inspect wrapper scripts.
+
+Execution IDs are `ex_` plus lowercase UUIDv4. Ownership matches canonical queue configuration path, integer Pueue ID, and creation timestamp. Deleted/recycled IDs cannot silently resolve to a different observed task. A daemon configuration must retain its target identity. Keep stores on a local filesystem with Unix permissions, reliable advisory locks, atomic rename, and fsync; network filesystems are unverified.
+
+Registration and local persistence cannot be one atomic distributed transaction. A successful registration followed by a store error returns a recovery receipt. An interrupted/ambiguous registration requires nonce-label reconciliation; there is no automatic add retry. Killing the client does not kill a daemon job. Records contain metadata only, not duplicate logs.
+
+v0.1 status/wait return state and timestamps. Read logs with Pueue. The internal bounded output probe reads up to 101 tail lines/8MiB response and reports truncation beyond 100 lines or the requested bytes; it does not silently claim a complete long log. stdout/stderr separation cannot be reconstructed from Pueue's merged output.
+
+Planned: v0.2 inspection/analysis and command replacement; v0.3 selective `query`/`recall`; later measurement/optimization workflows. These commands are not currently available. License, binary release destination, package registry, signing, and public hosting remain undecided. Nothing is published or deployed by the quality/release checks.

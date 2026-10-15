@@ -1,16 +1,7 @@
 [
-  {
-    "text": "Guide",
-    "link": "/guide/start/introduction",
-    "activeMatch": "/guide/"
-  },
-  {
-    "text": "API",
-    "link": "/api/",
-    "activeMatch": "/api/"
-  },
-  {
-    "text": "Document",
-    "link": "https://rspress.rs/"
-  }
+  { "text": "Start", "link": "/getting-started" },
+  { "text": "CLI", "link": "/cli" },
+  { "text": "Configuration", "link": "/configuration" },
+  { "text": "Limits", "link": "/architecture" },
+  { "text": "Release", "link": "/release" }
 ]

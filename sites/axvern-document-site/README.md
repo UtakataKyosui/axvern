@@ -1,29 +1,13 @@
-# Rspress website
+# axvern documentation
 
-## Setup
+Implementation documentation for the current axvern source. Requirements remain in GitHub Issues. Maintained content is under `docs/en`; no template translations are published.
 
-Install the dependencies:
-
-```bash
-npm install
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+pnpm run check
+pnpm run build
 ```
 
-## Get started
-
-Start the dev server:
-
-```bash
-npm run dev
-```
-
-Build the website for production:
-
-```bash
-npm run build
-```
-
-Preview the production build locally:
-
-```bash
-npm run preview
-```
+From the repository root: `moon run site:check site:build qualities:links`.
+The generated site stays local; publication requires separate authorization.

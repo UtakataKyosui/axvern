@@ -17,6 +17,15 @@ pub struct Config {
     pub policy: Policy,
     #[serde(default)]
     pub replacement: Replacement,
+    #[serde(default)]
+    pub execution: Execution,
+}
+/// Explicit backend configuration avoids Pueue's project-local config discovery.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Execution {
+    pub pueue_config: Option<PathBuf>,
+    pub store: Option<PathBuf>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,6 +69,7 @@ impl Default for Config {
             schema_version: 1,
             policy: Policy::default(),
             replacement: Replacement::default(),
+            execution: Execution::default(),
         }
     }
 }
