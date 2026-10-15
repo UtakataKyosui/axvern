@@ -2,6 +2,7 @@
 use crate::{
     adapters::pueue::PueueAdapter,
     config::{Config, UserPaths},
+    planner::{self, Planned},
     policy,
     store::{ExecutionStore, RegistrationFailure, register_and_save},
 };
@@ -125,17 +126,12 @@ pub fn authorize(
     interactive: bool,
     approval: Approval,
 ) -> Result<(), Error> {
-    let decision = policy::evaluate(config, plan)?;
-    if decision.effect == PolicyEffect::Deny
-        || (decision.effect == PolicyEffect::Ask
-            && (!interactive || approval != Approval::Approved))
-    {
-        return Err(Error::new(
-            ErrorCode::PolicyDenied,
-            "policy or approval refused registration",
-        ));
-    }
-    Ok(())
+    planner::authorize(
+        config,
+        &Planned::unchanged(plan.clone()),
+        interactive,
+        approval,
+    )
 }
 impl ExecutionService {
     pub(crate) fn target_snapshot(
@@ -186,23 +182,42 @@ impl ExecutionService {
         interactive: bool,
         approval: Approval,
     ) -> Result<ExecutionRecord, crate::store::RegistrationFailure> {
+        self.run_planned(
+            runner,
+            &Planned::unchanged(plan.clone()),
+            interactive,
+            approval,
+        )
+    }
+    /// Registers `planned.executable` once; the request identity and audit record keep
+    /// `planned.original`.
+    pub fn run_planned(
+        &mut self,
+        runner: &Path,
+        planned: &Planned,
+        interactive: bool,
+        approval: Approval,
+    ) -> Result<ExecutionRecord, crate::store::RegistrationFailure> {
         let fail = |error| crate::store::RegistrationFailure {
             error,
             receipt: None,
             execution_id: None,
         };
-        authorize(&self.config, plan, interactive, approval).map_err(fail)?;
+        planner::authorize(&self.config, planned, interactive, approval).map_err(fail)?;
         let id = ExecutionStore::allocate_id().map_err(fail)?;
-        let worker = self.worker_plan(runner, plan, &id).map_err(fail)?;
+        let worker = self
+            .worker_plan(runner, &planned.executable, &id)
+            .map_err(fail)?;
         let check_adapter = self.adapter.clone();
-        let registration = self.store.register_intent(
+        let registration = self.store.register_intent_rewritten(
             &id,
-            plan,
+            &planned.original,
+            planned.record().cloned(),
             || {
                 crate::results::preflight_registration_locked(
                     &self.store,
                     &self.config.results,
-                    plan,
+                    &planned.executable,
                 )?;
                 check_adapter.check()
             },
