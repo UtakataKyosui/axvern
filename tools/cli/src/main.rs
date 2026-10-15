@@ -301,16 +301,26 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
         };
         let worker_store = services::store_path(&config).expect("validated store");
         let settings = config.results.clone();
+        // Ask the user before the store lock is taken: a pending prompt must not stall
+        // other clients or workers. A replay or conflicting input never prompts.
+        let mut approval = Approval::NotProvided;
+        match service.store.request(key, &p) {
+            Ok(Some(_)) => (),
+            Ok(None) => {
+                let decision = match policy::evaluate(&config, &p) {
+                    Ok(d) => d,
+                    Err(e) => return failure(e),
+                };
+                if decision.effect == PolicyEffect::Ask && interactive {
+                    approval = approve();
+                }
+            }
+            Err(e) => return failure(e),
+        }
         let registration = service.store.register_request(
             key,
             &p,
             || {
-                let decision = policy::evaluate(&config, &p)?;
-                let approval = if decision.effect == PolicyEffect::Ask && interactive {
-                    approve()
-                } else {
-                    Approval::NotProvided
-                };
                 services::authorize(&config, &p, interactive, approval)?;
                 axvern_core::results::preflight_registration_locked(&service.store, &settings, &p)?;
                 check_adapter.check()

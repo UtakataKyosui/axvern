@@ -546,6 +546,71 @@ fn terminal_ask_requires_an_explicit_yes() {
 }
 
 #[test]
+fn pending_approval_for_a_keyed_run_does_not_hold_the_store_lock() {
+    let q = Queue::new();
+    let config = q._temp.path().join("ask.toml");
+    fs::write(
+        &config,
+        format!(
+            "schema_version=1\n[execution]\npueue_config={}\nstore={}\n",
+            serde_json::to_string(&q.adapter.config).unwrap(),
+            serde_json::to_string(&q._temp.path().join("store")).unwrap()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    let axvern = std::env::var_os("AXVERN_TEST_BIN").expect("use moon run qualities:test");
+    // While the prompt waits for an answer, another client must still reach the store.
+    let probe = serde_json::json!([
+        axvern.to_str().unwrap(),
+        "--config",
+        config.to_str().unwrap(),
+        "history",
+        "--format",
+        "json"
+    ]);
+    let out = Command::new("python3")
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/cli/approve.py"))
+        .arg("yes")
+        .arg(&axvern)
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--request-id",
+            "approval-key",
+            "--format",
+            "json",
+            "--",
+            "true",
+        ])
+        .current_dir(q._temp.path())
+        .env_remove("AXVERN_CONFIG")
+        .env("AXVERN_APPROVE_PROBE", probe.to_string())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        value["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("Policy asks for approval.")
+    );
+    assert_eq!(
+        value["probe"],
+        serde_json::json!({"exit": 0, "timed_out": false}),
+        "a pending approval prompt blocked another client"
+    );
+    assert_eq!(value["exit"], 0);
+    assert_eq!(q.adapter.list().unwrap().len(), 1);
+}
+
+#[test]
 fn schema_two_keyed_run_replays_after_policy_change_and_backend_log_deletion() {
     let q = Queue::new();
     let config = q._temp.path().join("v2.toml");
