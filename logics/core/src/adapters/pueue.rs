@@ -39,62 +39,14 @@ fn capture(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
 }
 impl PueueAdapter {
     fn call(&self, args: &[OsString]) -> Result<Vec<u8>, Error> {
-        let mut child = Command::new(&self.executable)
+        let mut command = Command::new(&self.executable);
+        command
             .arg("--config")
             .arg(&self.config)
             .args(["--color", "never"])
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                Error::new(
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        ErrorCode::MissingTool
-                    } else {
-                        ErrorCode::BackendFailure
-                    },
-                    "cannot start Pueue CLI",
-                )
-            })?;
-        let stdout = child.stdout.take().expect("piped stdout");
-        let stderr = child.stderr.take().expect("piped stderr");
-        let out = thread::spawn(move || capture(stdout));
-        let err = thread::spawn(move || capture(stderr));
-        let deadline = Instant::now() + self.timeout;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Ok(status),
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break Err(Error::new(
-                        ErrorCode::Timeout,
-                        "Pueue client timed out; task was not stopped",
-                    ));
-                }
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break Err(failure("cannot wait for Pueue CLI"));
-                }
-            }
-        };
-        let stdout = out
-            .join()
-            .map_err(|_| failure("Pueue reader failed"))?
-            .map_err(|_| failure("cannot read Pueue stdout"))?;
-        let stderr = err
-            .join()
-            .map_err(|_| failure("Pueue reader failed"))?
-            .map_err(|_| failure("cannot read Pueue stderr"))?;
-        let status = status?;
-        if stdout.len() > LIMIT || stderr.len() > LIMIT {
-            return Err(failure("Pueue response exceeds limit"));
-        }
-        if !status.success() {
+            .args(args);
+        let (success, stdout) = probe(&mut command, self.timeout)?;
+        if !success {
             if args.first().is_some_and(|arg| arg == "status") {
                 return Err(Error::new(
                     ErrorCode::DaemonUnavailable,
@@ -108,14 +60,74 @@ impl PueueAdapter {
     fn args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
     }
-    pub fn check(&self) -> Result<(), Error> {
-        // Version has no daemon side effects. Global config is accepted by Pueue.
+    pub fn version(&self) -> Result<(), Error> {
         let version = self.call(&Self::args(&["--version"]))?;
         if version != b"pueue 4.0.4\n" {
             return Err(failure("requires Pueue 4.0.4"));
         }
+        Ok(())
+    }
+    pub fn check(&self) -> Result<(), Error> {
+        self.version()?;
         self.list().map(|_| ())
     }
+}
+/// Bounded diagnostic subprocess; caller decides how to classify a nonzero exit.
+pub(crate) fn probe(command: &mut Command, timeout: Duration) -> Result<(bool, Vec<u8>), Error> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            Error::new(
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ErrorCode::MissingTool
+                } else {
+                    ErrorCode::BackendFailure
+                },
+                "cannot start Pueue CLI",
+            )
+        })?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let out = thread::spawn(move || capture(stdout));
+    let err = thread::spawn(move || capture(stderr));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(Error::new(
+                    ErrorCode::Timeout,
+                    "Pueue client timed out; task was not stopped",
+                ));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(failure("cannot wait for Pueue CLI"));
+            }
+        }
+    };
+    let stdout = out
+        .join()
+        .map_err(|_| failure("Pueue reader failed"))?
+        .map_err(|_| failure("cannot read Pueue stdout"))?;
+    let stderr = err
+        .join()
+        .map_err(|_| failure("Pueue reader failed"))?
+        .map_err(|_| failure("cannot read Pueue stderr"))?;
+    let status = status?;
+    if stdout.len() > LIMIT || stderr.len() > LIMIT {
+        return Err(failure("Pueue response exceeds limit"));
+    }
+    Ok((status.success(), stdout))
+}
+impl PueueAdapter {
     pub fn list(&self) -> Result<Vec<TaskSnapshot>, Error> {
         let raw = self.call(&Self::args(&["status", "--json"]))?;
         Self::parse_status(&self.queue, &raw)

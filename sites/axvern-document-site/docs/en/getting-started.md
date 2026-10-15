@@ -1,0 +1,61 @@
+# Build, install, and execute
+
+Targets: Linux and macOS (Unix filesystems). Rust 1.98.0 is pinned in `rust-toolchain.toml`; Pueue 4.0.4 is the only supported backend version. Windows is not supported. See [release evidence](/release) for the tested platforms.
+
+From the repository root:
+
+```sh
+cargo build --release --locked --bin axvern
+cargo install --locked --path tools/cli
+axvern --version
+cargo install --locked pueue --version 4.0.4
+pueue --version
+```
+
+The executable is named `axvern`, although its Cargo package is `axvern-cli`. The install smoke gate uses an isolated install root and does not overwrite your installed executable.
+
+Create/use your own Pueue configuration, following the [Pueue documentation](https://github.com/Nukesor/pueue/wiki). Set its `daemon.shell_command` to `["sh", "-c", "{{ pueue_command_string }}"]`; axvern's argv escaping is tested with this POSIX shell. Start your daemon explicitly:
+
+```sh
+pueued --config /absolute/path/to/pueue.yml
+```
+
+axvern never starts, stops, resets, or cleans your daemon. Use a dedicated Pueue configuration when isolating workloads. Keep its daemon/socket identity stable; use a new configuration path and store when switching daemons.
+
+Create a private axvern config (replace both paths):
+
+```toml
+schema_version = 1
+[execution]
+pueue_config = "/absolute/path/to/pueue.yml"
+store = "/absolute/path/to/axvern-executions"
+
+[[policy.rules]]
+id = "allow-sleep"
+command = "sleep"
+effect = "allow"
+```
+
+```sh
+chmod 600 /absolute/path/to/axvern.toml
+axvern --config /absolute/path/to/axvern.toml doctor
+axvern --config /absolute/path/to/axvern.toml run -- sleep 5
+# Use the returned ex_… ID:
+axvern --config /absolute/path/to/axvern.toml status <execution-id>
+axvern --config /absolute/path/to/axvern.toml wait <execution-id> --timeout 30s
+axvern --config /absolute/path/to/axvern.toml history --limit 20
+```
+
+`run` returns after registration and durable mapping, before command completion. Registration success does not mean the child succeeded. To inspect output, use the returned Pueue ID and the same configuration:
+
+```sh
+pueue --config /absolute/path/to/pueue.yml log <pueue-task-id>
+```
+
+Commands without an Allow rule default to Ask. With redirected input, they are refused without registration (exit 9):
+
+```sh
+axvern --config /absolute/path/to/axvern.toml run -- true </dev/null
+```
+
+If `doctor` reports a daemon failure, start `pueued --config` with that same file and check socket permissions. `doctor` displays a remedy; it never installs or repairs tools automatically.

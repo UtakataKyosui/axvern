@@ -1,238 +1,78 @@
 # axvern
 
-**Measure. Understand. Optimize. Verify.**
+Rust 製の非同期コマンド実行 CLI です。Pueue 4.0.4 に実行を委譲し、Policy と非対話時の承認拒否、独自実行 ID、状態照会、履歴、環境診断を提供します。
 
-**axvern** は、Coding Agentと開発者が、コードベースとプログラムの性能を根拠に基づいて改善するための **Rust製・開発最適化ハーネス** を目指すプロジェクトです。
+現在のソースで実装済み: `run` / `status` / `wait` / `history` / `doctor` / `policy check`。リリース前です。ライセンス・バイナリ配布先・レジストリ・公開サイトのホスティングは未決定で、この作業では公開・デプロイを行いません。
 
-Pueueによる非同期実行、Rust製を中心とした既存CLIの組み合わせ、実行結果の選択的取得を土台に、**調査 → 計測 → ボトルネック特定 → 改善 → 再計測** のサイクルを支援します。
+## Build / install
 
-> [!IMPORTANT]
-> **設計・開発準備段階です。** 以下は構想・実装予定のコマンド仕様です。インストール可能な製品や動作確認済み機能を示すものではありません。性能改善の自動保証や、Agentによる無条件のコード変更は行いません。
+対象は Linux / macOS、Rust 1.98.0、Pueue 4.0.4。実施済み環境と残るリリース条件は [release gate](sites/axvern-document-site/docs/en/release.md) を参照してください。
 
-## Why axvern?
-
-Coding Agentはコードを生成できます。しかし、コードが動くことと、効率的に動くことは別問題です。
-
-- ビルドが遅い場合、その原因がコンパイル、依存関係、リンク、キャッシュのどこにあるのか分かりにくい。
-- プログラムが遅い場合、印象だけでは改善すべき箇所を特定できない。
-- ビルド・テスト・計測のログが長く、Agentのコンテキストを圧迫する。
-- 改善前後を同じ条件で計測しないと、性能が本当に改善したか判断できない。
-- 優れたCLIが存在しても、Agentがツールごとのオプションや出力形式を都度扱う必要がある。
-
-axvernは、**既存の開発・計測ツールを組み合わせ、Agentが解釈しやすい結果と再現可能な比較を提供する**ことを目標とします。
-
-## Optimization loop
-
-```mermaid
-flowchart TD
-    Inspect["Inspect codebase"] --> Build["Build / Test / Run"]
-    Build --> Measure["Measure baseline"]
-    Measure --> Diagnose["Identify bottlenecks"]
-    Diagnose --> Improve["Improve code or configuration"]
-    Improve --> Verify["Re-measure under comparable conditions"]
-    Verify --> Decision{"Improvement confirmed?"}
-    Decision -->|Yes| Report["Record evidence and results"]
-    Decision -->|No| Diagnose
+```sh
+cargo build --release --locked --bin axvern
+cargo install --locked --path tools/cli
+axvern --version
+cargo install --locked pueue --version 4.0.4
 ```
 
-最適化は、**正しさを維持しながら、再現性のある計測結果に基づいて判断する**ことを前提にします。計測条件、比較対象、実行環境、実行IDを記録し、性能向上と引き換えの不具合を避けるためテスト結果も追跡します。
+公開 binary 名は `axvern`、Cargo package 名は `axvern-cli` です。
 
-## Planned capabilities
+[Pueue の設定手順](https://github.com/Nukesor/pueue/wiki)に従って専用設定を用意し、`daemon.shell_command` に `["sh", "-c", "{{ pueue_command_string }}"]` を設定してください。daemon の起動は明示的に行います。
 
-### 1. Background command execution（v0.1）
-
-[Pueue](https://github.com/Nukesor/pueue) をバックグラウンド実行基盤として利用します。v0.1では実行IDから状態を照会し、基本的なログ参照はPueueに委譲します。高度な部分抽出はv0.3で追加します。
-
-<!-- 以下は全フェーズを含む予定コマンド例です。 -->
-```bash
-axvern run -- cargo test
-axvern status <execution-id>
-axvern wait <execution-id>
-
-# v0.3で追加予定（v0.1では未提供）
-axvern query <execution-id> --errors
-axvern query <execution-id> --match "error"
-axvern recall <execution-id>
+```sh
+pueued --config /absolute/path/to/pueue.yml
 ```
 
-`query` と `recall` はコマンドを再実行しません。ログ保持期間やPueue側の削除に制約があり、stdoutとstderrの完全分離復元は保証しません。
-
-### 2. Codebase inspection（v0.2）
-
-`eza`、`fd`、`rg`、`bat`、`ast-grep`、`tokei` を組み合わせ、コードベースの規模・構造・言語構成・検索対象を把握します。
-
-```bash
-axvern fs list ./src
-axvern fs find --glob '*.rs' ./src
-axvern fs search 'TODO' ./src
-axvern fs read ./src/main.rs --from-line 1 --lines 80  # v0.2
-axvern code search --pattern 'fn $NAME($$$ARGS) { $$$BODY }' ./src  # v0.2
-axvern fs analyze . --max-depth 3 --format json  # v0.2
-axvern code stats .                            # v0.2
-```
-
-`fs analyze` は、`eza`（構造）+ `fd`（ファイル・設定ファイル探索）+ `tokei`（コード統計）を統合する機能です。構造の検出結果と設計上の推定は明確に区別します。
-
-### 3. Build and runtime measurement（v0.4以降の構想）
-
-ビルド・実行を同じ条件で測定し、結果を比較するためのインターフェースを検討します。
-
-```bash
-# 以下は将来の構想。未確定のCLI仕様
-axvern measure build -- cargo build --release
-axvern measure run -- ./target/release/my-app
-axvern benchmark --warmup 3 --runs 10 -- ./target/release/my-app
-axvern compare <baseline-id> <candidate-id>
-```
-
-主な候補は [`hyperfine`](https://github.com/sharkdp/hyperfine)（反復計測・統計・JSON出力）、OS標準の計測機能、ビルドツール自身が提供するタイミング情報です。単発の実行時間と、統計的なベンチマーク結果は区別します。
-
-### 4. Bottleneck investigation（v0.4以降の構想）
-
-プロファイリング等の既存ツールを利用して、遅延が生じる箇所の調査を支援します。
-
-- [`samply`](https://github.com/mstange/samply)：CPUプロファイル取得の候補。
-- [`flamegraph`](https://github.com/flamegraph-rs/flamegraph)：プロファイルをフレームグラフとして表示する候補。
-- [`hyperfine`](https://github.com/sharkdp/hyperfine)：改善前後の処理時間比較。
-- `cargo` / `pnpm` / `moonrepo` 等：既存のビルドタスク、依存関係、実行メタデータの取得元。
-
-プロファイラのOS対応、権限、計測オーバーヘッド、成果物形式は事前検証が必要です。Rustで書かれたCLIだけに限定すると必要な計測手段を失う場合があるため、**Rust製CLIを優先しつつ、用途に応じて非Rust製の既存ツールも採用**します。
-
-### 5. Additional utilities（v0.2の候補・将来機能）
-
-| Planned command | Existing CLI | Role |
-| --- | --- | --- |
-| `axvern code diff` | `git diff` + `delta` | 変更差分の把握 |
-| `axvern system disk-usage` | `dust` | 大きなディレクトリの特定 |
-| `axvern system processes` | `procs` | プロセス調査 |
-| `axvern text replace` | `sd` | テキスト置換（追加候補・変更操作） |
-
-## Design principle: Compose, don't reinvent
-
-```mermaid
-flowchart TD
-    User["Coding Agent / Developer"] --> Ax["axvern"]
-    Ax --> Policy["Policy / Execution Plan"]
-    Policy --> Queue["Pueue: task execution & logs"]
-    Queue --> Tools["Existing CLI tools"]
-    Tools --> Artifacts["Logs / Metrics / Reports"]
-    Artifacts --> Extract["Selective retrieval & structured results"]
-    Extract --> User
-    Ax --> Analysis["Composition / Comparison"]
-    Analysis --> Artifacts
-```
-
-- **Pueue** は実行キュー、状態、ログ保持を担当。
-- **既存CLI** は探索、解析、ビルド、計測、プロファイリングを担当。
-- **axvern** は引数の検証、Policy、ツール選択、複数結果の統合、部分取得、比較レポートの整形を担当。
-- **Coding Agent** は得られた証拠から変更案を検討し、テストと再計測で検証します。
-
-コマンドの自動置換は既定で無効です。`find` / `fd` など、構文や挙動が異なるツールを無条件に変換しません。
-
-## Roadmap
-
-| Phase | Target | What axvern delivers |
-| --- | --- | --- |
-| **1 · Execute** | **v0.1** | Background commands with Pueue, task status, wait, history, basic execution guard |
-| **2 · Discover** | **v0.2** | Smart codebase commands composed from eza, fd, ripgrep, bat, tokei, ast-grep |
-| **3 · Retrieve** | **v0.3** | Temporary result storage, log query, selective extraction and recall without rerunning |
-| **4 · Optimize** | **v0.4+** | Benchmarking, baseline comparison, performance regression and bottleneck investigation |
-
-```mermaid
-flowchart LR
-  P1[v0.1 Execute] --> P2[v0.2 Discover] --> P3[v0.3 Retrieve] --> P4[v0.4+ Optimize]
-```
-
-**Phase 1では`query`/`recall`を提供しない。Phase 2では高度なログ検索を前提にせず、既存CLIの結果を取得・表示する。** バージョンは実装予定であり、リリース済みを意味しない。詳しくは[Milestones](https://github.com/UtakataKyosui/axvern/milestones)を参照。
-
-## Safety and measurement limitations
-
-- コマンド実行ポリシーはOSレベルのサンドボックスではありません。Pueueへの安全な引数受け渡しは事前検証が必要です。
-- 計測結果は実行環境、入力、キャッシュ、CPU負荷、ウォームアップなどの影響を受けます。異なる条件の計測値をそのまま改善率として扱いません。
-- ベンチマークは複数回コマンドを実行します。副作用を持つ処理には明示的な許可と隔離が必要です。
-- ログ・計測成果物には秘密情報が含まれ得るため、アクセス権・保存期間・機密情報の扱いを設計します。
-- axvernは最適化の効果を保証しません。改善の判定には正しさの検証と比較可能な計測データが必要です。
-- `--dry-run`、独自プロセスマネージャー、LLMによる自動変更、Docker必須化は初期スコープ外です。
-
-## Requirements & documentation
-
-要件定義・設計・受入条件・未決事項はGitHub Issueを正本として管理しています。
-既存の設計文書の本文もIssueへ移管しました。
-
-- [設計文書の移管先](https://github.com/UtakataKyosui/axvern/issues/5)
-- [サブコマンドの要件定義Issue](https://github.com/UtakataKyosui/axvern/issues?q=is%3Aissue%20label%3Adesign)
-- [共通CLI契約・結果取得・設定](https://github.com/UtakataKyosui/axvern/issues/34)
-- [クレート選定の提案](https://github.com/UtakataKyosui/axvern/issues/7)
-
-`sites`は実装・検証済み機能の公開ドキュメントを作成するプロジェクトです。
-
-## Workspace development
-
-Rustは `rust-toolchain.toml` の **1.98.0** に固定し、workspaceのMSRVも1.98とします。
-更新はtoolchainとMSRVを同時に変更し、workspace全体を検証します。
-
-| 配置 | package / 責務 |
-| --- | --- |
-| `logics/models` | `axvern-models`: 共有型・Trait。runtime・CLI・具体的I/Oに依存しない |
-| `logics/core` | `axvern-core`: ユースケース・Policy・Adapter。modelsに依存 |
-| `logics/tests` | `axvern-tests`: 非公開のロジック・契約・統合テスト。core/modelsを検証 |
-| `tools/cli` | `axvern-cli`: 引数・配線・表示・終了コード。公開binary名は `axvern` |
-| `qualities` | workspace品質タスクの設定 |
-| `sites/axvern-document-site` | 公開ドキュメントプロジェクト |
-
-Cargoがpackageと依存、Moonが横断実行を管理します。Moon **2.5.6**、Node **24.22.0**、pnpm **12.11.2** を検証済みです。
-Moonはsystem toolchainを使い、Rust/Nodeを自動更新しません。Moonが未導入なら `pnpm dlx @moonrepo/cli@2.5.6` を `moon` の代わりに使えます。
-
-```bash
-# サイトの既存lockfileから依存を復元
-pnpm --dir sites/axvern-document-site install --frozen-lockfile
-moon projects
-moon run qualities:verify
-
-# 個別実行
-moon run qualities:fmt qualities:clippy qualities:test qualities:build
-moon run site:check site:build
-cargo tree --locked -e features
-```
-
-Moonのcheckはファイルを書き換えません。`qualities:test` はbuild依存で公開binaryを生成し、
-`AXVERN_TEST_BIN` で別packageのCLI試験へ渡します。直接 `cargo test` を実行する場合も、先に
-`cargo build --workspace --locked` を実行して同変数へbinaryの絶対パスを指定してください。
-
-Pueue **4.0.4** の隔離Spikeは `moon run qualities:pueue-spike`（Python 3.9以上）。
-`devbox run test` でも固定版Moon/Pueueを使って品質ゲートとSpikeを実行できます。
-DevboxはRust/Node/pnpm/Pythonを同梱しないため上記バージョンを別途用意してください。
-[CI](.github/workflows/quality.yml) はLinux/macOSの同一タスクを実行します。
-macOSの実測と後続Adapterへの制約は[fixture記録](logics/tests/fixtures/pueue/README.md)を参照してください。
-Linux実行結果は未取得です。
-
-実装済みの判定コマンド（ターゲットの実行やPueue接続はしません）:
-
-```bash
-cargo run -p axvern-cli -- policy check --format json -- git status
-```
-
-設定は `--config PATH` > `AXVERN_CONFIG` > OSユーザー設定の `config.toml`。
-不在時の既定はAskで、明示ファイルの不在・不正設定はエラーです。Unixの設定ファイルは0600にしてください。
+axvern 設定例（パスを置換し、`chmod 600` してください）:
 
 ```toml
 schema_version = 1
-[policy]
-default = "ask"
+[execution]
+pueue_config = "/absolute/path/to/pueue.yml"
+store = "/absolute/path/to/axvern-executions"
+
 [[policy.rules]]
-id = "git-status"
+id = "sleep"
+command = "sleep"
 effect = "allow"
-command = "git"
-args_prefix = ["status"]
 ```
 
-判定に成功すればAllow/Ask/Denyすべて終了0。実行承認ではありません。
-不正入力は2、設定エラーは3、設定の権限問題は4を返します。
-実行用Adapter、run/status等のコマンドは後続Issueの対象です。
-承認済みの設計判断と検証報告はIssue #5〜#7に反映済みです。[.github/issue-updates](.github/issue-updates/) は反映内容の控えで、正本はGitHub Issueです。
+```sh
+export AXVERN_CONFIG=/absolute/path/to/axvern.toml
+axvern doctor
+axvern run -- sleep 5
+axvern status <execution-id> --format json
+axvern wait <execution-id> --timeout 30s --format json
+axvern history --limit 20
+pueue --config /absolute/path/to/pueue.yml log <pueue-task-id>
 
-## Development status
+# 未一致は Ask。非対話では登録せず exit 9:
+axvern run -- true </dev/null
+```
 
-現在は**設計段階**です。インストール手順、対応OS、依存ツールの必要バージョン、配布方式、ライセンスは決定・検証後に追記します。
+`run` の成功は登録・ID 保存の成功です。子の成功は `status` / `wait` で確認します。timeout はジョブを停止しません。引数は `--` 以降をそのまま分離し、任意シェル評価は既定で拒否します。Policy は OS sandbox ではありません。
 
-**Don't reinvent the command. Compose it. Measure the result.**
+## Documentation
+
+- [導入](sites/axvern-document-site/docs/en/getting-started.md)
+- [CLI / JSON / 終了コード](sites/axvern-document-site/docs/en/cli.md)
+- [設定・Policy・保存領域](sites/axvern-document-site/docs/en/configuration.md)
+- [構成・制限・復旧](sites/axvern-document-site/docs/en/architecture.md)
+- [リリース条件と検証証拠](sites/axvern-document-site/docs/en/release.md)
+
+要件・設計の正本は [GitHub Issues](https://github.com/UtakataKyosui/axvern/issues)。`docs` は移管案内、`sites` は実装済みの仕様説明です。v0.2 の調査/置換、v0.3 の `query` / `recall` は未提供です。
+
+## Development
+
+依存方向: `tools/cli → logics/core → logics/models`。共有契約は models、ユースケース・具体 I/O は core、統合テストは logics/tests、品質設定は qualities、公開ドキュメントは sites に配置しています。
+
+Node 24.22.0、pnpm 12.11.2、Moon 2.5.6、Python 3、Rust 1.98.0 を用意します。Devbox は Moon/Pueue を固定します。
+
+```sh
+pnpm --dir sites/axvern-document-site install --frozen-lockfile
+devbox run test
+# 開発サイト:
+pnpm --dir sites/axvern-document-site dev
+```
+
+品質ゲートは Rust fmt/check/Clippy/build/test、サイト check/build/内部リンク検査、隔離 Pueue spike、隔離 install smoke を実行します。CI は Ubuntu/macOS の証拠を artifact に保存します。
