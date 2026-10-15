@@ -1,0 +1,239 @@
+[
+  {
+    "name": "policy",
+    "args": [
+      "policy",
+      "check",
+      "--",
+      "true"
+    ],
+    "expected_exit": 0,
+    "expected_error": null
+  },
+  {
+    "name": "argv-boundary",
+    "args": [
+      "policy",
+      "check",
+      "--",
+      "true",
+      "--format",
+      "json",
+      ""
+    ],
+    "expected_exit": 0,
+    "expected_error": null
+  },
+  {
+    "name": "ask",
+    "args": [
+      "run",
+      "--",
+      "true"
+    ],
+    "expected_exit": 9,
+    "expected_error": "policy_denied"
+  },
+  {
+    "name": "missing-target",
+    "args": [
+      "run",
+      "--"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "unknown",
+    "args": [
+      "history",
+      "--unknown",
+      "1"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "duplicate",
+    "args": [
+      "history",
+      "--limit",
+      "1",
+      "--limit",
+      "2"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "exclusive",
+    "args": [
+      "policy",
+      "check",
+      "--cwd",
+      ".",
+      "--",
+      "true"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "limit-0",
+    "args": [
+      "history",
+      "--limit",
+      "0"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "limit-1001",
+    "args": [
+      "history",
+      "--limit",
+      "1001"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "limit--1",
+    "args": [
+      "history",
+      "--limit",
+      "-1"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "limit-1.5",
+    "args": [
+      "history",
+      "--limit",
+      "1.5"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "limit-18446744073709551616",
+    "args": [
+      "history",
+      "--limit",
+      "18446744073709551616"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "timeout-0s",
+    "args": [
+      "wait",
+      "ex_550e8400-e29b-41d4-a716-446655440000",
+      "--timeout",
+      "0s"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "timeout-1",
+    "args": [
+      "wait",
+      "ex_550e8400-e29b-41d4-a716-446655440000",
+      "--timeout",
+      "1"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "timeout--1s",
+    "args": [
+      "wait",
+      "ex_550e8400-e29b-41d4-a716-446655440000",
+      "--timeout",
+      "-1s"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "timeout-1.5s",
+    "args": [
+      "wait",
+      "ex_550e8400-e29b-41d4-a716-446655440000",
+      "--timeout",
+      "1.5s"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "timeout-1441m",
+    "args": [
+      "wait",
+      "ex_550e8400-e29b-41d4-a716-446655440000",
+      "--timeout",
+      "1441m"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "timeout-18446744073709551616ms",
+    "args": [
+      "wait",
+      "ex_550e8400-e29b-41d4-a716-446655440000",
+      "--timeout",
+      "18446744073709551616ms"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "limit-valid-1",
+    "args": [
+      "history",
+      "--limit",
+      "1"
+    ],
+    "expected_exit": 3,
+    "expected_error": "invalid_config"
+  },
+  {
+    "name": "limit-valid-1000",
+    "args": [
+      "history",
+      "--limit",
+      "1000"
+    ],
+    "expected_exit": 3,
+    "expected_error": "invalid_config"
+  },
+  {
+    "name": "timeout-valid-1ms",
+    "args": [
+      "wait",
+      "ex_550e8400-e29b-41d4-a716-446655440000",
+      "--timeout",
+      "1ms"
+    ],
+    "expected_exit": 3,
+    "expected_error": "invalid_config"
+  },
+  {
+    "name": "timeout-valid-1440m",
+    "args": [
+      "wait",
+      "ex_550e8400-e29b-41d4-a716-446655440000",
+      "--timeout",
+      "1440m"
+    ],
+    "expected_exit": 3,
+    "expected_error": "invalid_config"
+  }
+]

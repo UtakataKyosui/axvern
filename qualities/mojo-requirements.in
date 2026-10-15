@@ -1,0 +1,2 @@
+# Development/CI compiler only; no dependency is added to the shipped CLI.
+mojo-compiler==1.1.0

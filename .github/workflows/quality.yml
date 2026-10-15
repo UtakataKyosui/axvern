@@ -45,6 +45,17 @@ jobs:
         run: npm install --global @moonrepo/cli@2.5.6 pnpm@12.11.2
       - if: needs.changes.outputs.rust == 'true'
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+      - uses: actions/setup-python@v5
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: qualities/mojo-requirements.txt
+      - name: Install pinned Mojo compiler for CLI contract tests
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          python -m venv target/mojo-env
+          target/mojo-env/bin/python -m pip install --require-hashes -r qualities/mojo-requirements.txt
       - uses: actions/cache@v4
         if: needs.changes.outputs.rust == 'true'
         with:
@@ -103,4 +114,5 @@ jobs:
             target/pueue-spike.json
             target/release-evidence.json
             target/quality.log
+            target/cli-contract-evidence.json
           if-no-files-found: ignore
