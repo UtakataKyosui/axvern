@@ -323,21 +323,35 @@ fn doctor_tool_and_store_failures_are_structured() {
     };
     let (code, checks) = scoped("discovery");
     assert_eq!(code, 12);
-    let missing = find(&checks, "eza").unwrap();
+    // Tools with an adapter are judged by version; the others only report capability data.
+    let missing = find(&checks, "fd").unwrap();
     assert_eq!(missing["level"], "fail");
     assert_eq!(missing["tool"]["installed"], false);
     assert_eq!(missing["tool"]["feature_available"], false);
-    assert_eq!(missing["tool"]["supported_versions"], serde_json::json!([]));
-    let installed = find(&checks, "rg").unwrap();
-    assert_eq!(installed["level"], "fail");
-    assert_eq!(installed["tool"]["installed"], true);
-    assert_eq!(installed["tool"]["version"], "14.1.0");
-    assert_eq!(installed["tool"]["feature_available"], false);
     assert!(
-        installed["message"]
+        missing["message"]
             .as_str()
             .unwrap()
-            .contains("unsupported tool capability")
+            .contains("missing tool")
+    );
+    assert_eq!(
+        missing["tool"]["supported_versions"],
+        serde_json::json!([">=10.0.0 (tested 10.5.0)"])
+    );
+    let installed = find(&checks, "rg").unwrap();
+    assert_eq!(installed["level"], "pass");
+    assert_eq!(installed["tool"]["installed"], true);
+    assert_eq!(installed["tool"]["version"], "14.1.0");
+    assert_eq!(installed["tool"]["feature_available"], true);
+    let optional = find(&checks, "eza").unwrap();
+    assert_eq!(optional["level"], "warning");
+    assert_eq!(optional["tool"]["installed"], false);
+    assert_eq!(optional["tool"]["feature_available"], false);
+    let unprovided = find(&checks, "tokei").unwrap();
+    assert_eq!(unprovided["level"], "fail");
+    assert_eq!(
+        unprovided["tool"]["supported_versions"],
+        serde_json::json!([])
     );
     assert!(find(&checks, "hyperfine").is_none());
     let (_, checks) = scoped("performance");

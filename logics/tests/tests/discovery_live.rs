@@ -217,7 +217,7 @@ fn unreadable_subdirectory_is_a_partial_result_not_a_failure() {
     let root = q._temp.path().join("tree");
     write(&root, "ok/f", "x");
     write(&root, "locked/g", "x");
-    fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
     let config = config(&q, "");
     let response = start(&q, &config, &["fs", "list", "tree", "--depth", "2"]);
     fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
@@ -235,7 +235,7 @@ fn unreadable_subdirectory_is_a_partial_result_not_a_failure() {
 /// Permission tests are meaningless when the process can read anything.
 fn unsafe_root_can_read(root: &Path) -> bool {
     let locked = root.join("locked");
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     let readable = fs::read_dir(&locked).is_ok();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     readable

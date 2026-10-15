@@ -279,5 +279,97 @@
     ],
     "expected_exit": 2,
     "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-list-ask",
+    "args": [
+      "fs",
+      "list"
+    ],
+    "expected_exit": 9,
+    "expected_error": "policy_denied"
+  },
+  {
+    "name": "fs-list-depth-0",
+    "args": [
+      "fs",
+      "list",
+      "--depth",
+      "0"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-list-missing",
+    "args": [
+      "fs",
+      "list",
+      "no-such-directory"
+    ],
+    "expected_exit": 2,
+    "expected_error": "target_not_found"
+  },
+  {
+    "name": "fs-find-no-pattern",
+    "args": [
+      "fs",
+      "find"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-find-bad-regex",
+    "args": [
+      "fs",
+      "find",
+      "("
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_pattern"
+  },
+  {
+    "name": "fs-search-bad-regex",
+    "args": [
+      "fs",
+      "search",
+      "("
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_pattern"
+  },
+  {
+    "name": "fs-search-context-21",
+    "args": [
+      "fs",
+      "search",
+      "x",
+      "--context",
+      "21"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-read-no-file",
+    "args": [
+      "fs",
+      "read"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-read-lines-0",
+    "args": [
+      "fs",
+      "read",
+      "x",
+      "--lines",
+      "0"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
   }
 ]

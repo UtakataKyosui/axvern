@@ -157,10 +157,12 @@ impl Normalizer for BatNormalizer {
     }
     fn finish(mut self: Box<Self>, exit: &TargetExit, stderr: &[u8]) -> DiscoveryOutcome {
         let mut issues = Issues::default();
-        if self.stop.is_none() && exit.stopped.is_none() && !exit.spawn_failed {
-            if !self.current.is_empty() || self.overflowed {
-                let _ = self.line();
-            }
+        if self.stop.is_none()
+            && exit.stopped.is_none()
+            && !exit.spawn_failed
+            && (!self.current.is_empty() || self.overflowed)
+        {
+            let _ = self.line();
         }
         let stop = self.stop.or(exit.stopped);
         let mut state = ChildState::Done;
