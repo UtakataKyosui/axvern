@@ -25,6 +25,7 @@ dependencies = [
  "axvern-models",
  "directories",
  "serde",
+ "serde_json",
  "toml",
 ]
 
