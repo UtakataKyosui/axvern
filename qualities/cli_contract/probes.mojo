@@ -278,6 +278,8 @@ def probe(binary_path: String, cases_path: String) raises:
             evaluate_case(binary, String(py=config), root, env, probe_case)
             print("PASS", probe_case.name)
         var human_args: List[String] = [
+            "--format",
+            "human",
             "--config",
             String(py=config),
             "policy",

@@ -1,7 +1,7 @@
 [
   {
     "name": "null envelope",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -10,7 +10,7 @@
   },
   {
     "name": "failed child",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": \"failed\", \"exit_code\": 23, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": \"failed\", \"exit_code\": 23, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 10,
     "mode": "response",
@@ -19,7 +19,7 @@
   },
   {
     "name": "partial result",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"executions\": []}, \"error\": {\"code\": \"partial_result\", \"message\": \"offline\"}}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"executions\": []}, \"error\": {\"code\": \"partial_result\", \"message\": \"offline\"}}\n",
     "stderr": "",
     "exit_code": 11,
     "mode": "response",
@@ -28,7 +28,7 @@
   },
   {
     "name": "doctor fail",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"level\": \"fail\"}, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"level\": \"fail\"}, \"error\": null}\n",
     "stderr": "",
     "exit_code": 12,
     "mode": "response",
@@ -37,7 +37,7 @@
   },
   {
     "name": "UUID and running",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": \"ex_550e8400-e29b-41d4-a716-446655440000\", \"state\": \"running\", \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": \"ex_550e8400-e29b-41d4-a716-446655440000\", \"state\": \"running\", \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -64,7 +64,7 @@
   },
   {
     "name": "bad ID",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": \"axv_bad\", \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": \"axv_bad\", \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -73,7 +73,7 @@
   },
   {
     "name": "bad state",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": \"unknown\", \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": \"unknown\", \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -82,7 +82,7 @@
   },
   {
     "name": "boolean exit",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": true, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": true, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -91,7 +91,7 @@
   },
   {
     "name": "array output",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": [], \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": [], \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -100,7 +100,7 @@
   },
   {
     "name": "stderr",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "warning",
     "exit_code": 0,
     "mode": "response",
@@ -109,7 +109,7 @@
   },
   {
     "name": "two docs",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -118,7 +118,7 @@
   },
   {
     "name": "missing newline",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -127,7 +127,7 @@
   },
   {
     "name": "wrong exit",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\", \"message\": \"bad\"}}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\", \"message\": \"bad\"}}\n",
     "stderr": "",
     "exit_code": 3,
     "mode": "response",
@@ -136,7 +136,7 @@
   },
   {
     "name": "unknown code",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invented\", \"message\": \"bad\"}}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invented\", \"message\": \"bad\"}}\n",
     "stderr": "",
     "exit_code": 1,
     "mode": "response",
@@ -145,7 +145,7 @@
   },
   {
     "name": "wrong child state",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 10,
     "mode": "response",
@@ -154,7 +154,7 @@
   },
   {
     "name": "wrong doctor output",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 12,
     "mode": "response",
@@ -163,7 +163,7 @@
   },
   {
     "name": "duplicate schema",
-    "stdout": "{\"schema_version\":1,\"schema_version\":1}\n",
+    "stdout": "{\"schema_version\":2,\"command\":null,\"schema_version\":1}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -172,7 +172,7 @@
   },
   {
     "name": "NaN",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"value\": NaN}, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"value\": NaN}, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -388,7 +388,7 @@
   },
   {
     "name": "exit i32 min",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": -2147483648, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": -2147483648, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -397,7 +397,7 @@
   },
   {
     "name": "exit i32 max",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": 2147483647, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": 2147483647, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -406,7 +406,7 @@
   },
   {
     "name": "exit i32 overflow",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": 2147483648, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": 2147483648, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -415,7 +415,7 @@
   },
   {
     "name": "exit huge",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": 999999999999999999999999999999999999999, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": 999999999999999999999999999999999999999, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -433,7 +433,7 @@
   },
   {
     "name": "numeric ID",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": 1, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": 1, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -442,7 +442,7 @@
   },
   {
     "name": "boolean state",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": true, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": true, \"exit_code\": null, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -451,7 +451,7 @@
   },
   {
     "name": "string child exit",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": \"0\", \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": \"0\", \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -460,7 +460,7 @@
   },
   {
     "name": "float child exit",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": 1.0, \"output\": null, \"error\": null}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": 1.0, \"output\": null, \"error\": null}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -469,7 +469,7 @@
   },
   {
     "name": "error array",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": []}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": []}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -478,7 +478,7 @@
   },
   {
     "name": "error message missing",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\"}}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\"}}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",
@@ -487,7 +487,7 @@
   },
   {
     "name": "error message number",
-    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\", \"message\": 1}}\n",
+    "stdout": "{\"schema_version\": 2, \"command\": null, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\", \"message\": 1}}\n",
     "stderr": "",
     "exit_code": 0,
     "mode": "response",

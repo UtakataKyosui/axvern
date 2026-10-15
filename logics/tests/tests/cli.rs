@@ -86,7 +86,10 @@ fn syntax_config_errors_and_target_flags() {
     );
     assert_eq!(result.status.code(), Some(3));
     assert!(!String::from_utf8_lossy(&result.stdout).contains("DO_NOT_PRINT"));
-    let result = cli(&["policy", "check", "--", "git"], Some(&config));
+    let result = cli(
+        &["policy", "check", "--format", "human", "--", "git"],
+        Some(&config),
+    );
     assert!(result.status.success());
     assert!(String::from_utf8_lossy(&result.stdout).contains("Ask"));
 }
@@ -158,7 +161,10 @@ fn policy_output_golden_and_refusal_before_backend_setup() {
         expected
     );
     assert_eq!(json.stdout.iter().filter(|b| **b == b'\n').count(), 1);
-    let human = cli(&["policy", "check", "--", "true"], Some(&config));
+    let human = cli(
+        &["policy", "check", "--format", "human", "--", "true"],
+        Some(&config),
+    );
     assert!(human.status.success());
     assert!(human.stderr.is_empty());
     assert_eq!(
@@ -292,4 +298,46 @@ fn doctor_tool_and_store_failures_are_structured() {
         "fail"
     );
     std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn schema_two_options_policy_cwd_matching_rules_and_invalid_boundaries() {
+    let (_dir, config) = private_config(
+        "schema_version=1\n[[policy.rules]]\nid='a'\ncommand='true'\neffect='allow'\n[[policy.rules]]\nid='d'\ncommand='true'\neffect='deny'",
+    );
+    let cwd = config.parent().unwrap().to_str().unwrap();
+    let result = cli(
+        &["policy", "check", "--cwd", cwd, "--", "true"],
+        Some(&config),
+    );
+    assert!(result.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["command"], "policy check");
+    assert_eq!(
+        value["output"]["matching_rule_ids"],
+        serde_json::json!(["a", "d"])
+    );
+    assert_eq!(value["output"]["rule_id"], "d");
+    for args in [
+        vec!["run", "--wait", "-1s", "--", "true"],
+        vec!["run", "--wait", "24h", "--", "true"],
+        vec!["run", "--request-id", "bad/key", "--", "true"],
+        vec!["run", "--request-id", "", "--", "true"],
+        vec!["run", "--wait", "0s", "--wait", "0s", "--", "true"],
+        vec!["doctor", "--scope", "unknown"],
+        vec!["history", "--scope", "core"],
+        vec![
+            "policy",
+            "check",
+            "--cwd",
+            "/axvern-nonexistent-cwd",
+            "--",
+            "true",
+        ],
+    ] {
+        let result = cli(&args, Some(&config));
+        assert_eq!(result.status.code(), Some(2));
+        assert!(result.stderr.is_empty());
+    }
 }

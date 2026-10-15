@@ -91,8 +91,14 @@ pub(crate) fn probe(command: &mut Command, timeout: Duration) -> Result<(bool, V
         })?;
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
-    let out = thread::spawn(move || capture(stdout));
-    let err = thread::spawn(move || capture(stderr));
+    let (out_tx, out) = std::sync::mpsc::sync_channel(1);
+    let (err_tx, err) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = out_tx.send(capture(stdout));
+    });
+    thread::spawn(move || {
+        let _ = err_tx.send(capture(stderr));
+    });
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
@@ -113,15 +119,21 @@ pub(crate) fn probe(command: &mut Command, timeout: Duration) -> Result<(bool, V
             }
         }
     };
+    let status = status?;
+    let reader_timeout = || {
+        Error::new(
+            ErrorCode::Timeout,
+            "backend pipe read timed out; task was not stopped",
+        )
+    };
     let stdout = out
-        .join()
-        .map_err(|_| failure("Pueue reader failed"))?
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| reader_timeout())?
         .map_err(|_| failure("cannot read Pueue stdout"))?;
     let stderr = err
-        .join()
-        .map_err(|_| failure("Pueue reader failed"))?
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| reader_timeout())?
         .map_err(|_| failure("cannot read Pueue stderr"))?;
-    let status = status?;
     if stdout.len() > LIMIT || stderr.len() > LIMIT {
         return Err(failure("Pueue response exceeds limit"));
     }
@@ -253,11 +265,19 @@ impl PueueAdapter {
                 ));
             }
             thread::sleep(
-                Duration::from_millis(20).min(deadline.saturating_duration_since(Instant::now())),
+                Duration::from_millis(250).min(deadline.saturating_duration_since(Instant::now())),
             );
         }
     }
     pub fn register_identified(&mut self, plan: &ExecutionPlan) -> Result<BackendIdentity, Error> {
+        let label = crate::store::ExecutionStore::allocate_id()?;
+        self.register_with_label(plan, &label)
+    }
+    pub fn register_with_label(
+        &mut self,
+        plan: &ExecutionPlan,
+        label: &ExecutionId,
+    ) -> Result<BackendIdentity, Error> {
         if self.queue.is_empty() {
             return Err(Error::new(
                 ErrorCode::InvalidInput,
@@ -272,7 +292,7 @@ impl PueueAdapter {
             ));
         }
         self.check()?;
-        let label = crate::store::ExecutionStore::allocate_id()?.to_string();
+        let label = label.to_string();
         let mut args = Self::args(&[
             "add",
             "--print-task-id",

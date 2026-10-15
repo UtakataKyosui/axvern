@@ -26,3 +26,7 @@ GitHub Actions runs the same gates on Ubuntu and macOS and uploads `quality-<os>
 Tests create a private daemon/config/socket/store and never attach to the user's queue. Store tests include thread/process concurrency, interrupted writers, schema/permission failures and receipt recovery. Public output golden fixtures cover stdout/stderr and failure exits. Doctor is checked before/after against task snapshots and pending writer data.
 
 Local macOS execution is recorded under `qualities/evidence/14-16-macos.md`. Linux results are supplied by the Ubuntu CI job after this branch is committed/pushed; until that evidence exists, the cross-platform release gate remains pending. Do not describe Linux acceptance as completed merely because its workflow is configured.
+
+## Schema 2 additions (#34–#40)
+
+The current source adds JSON-default schema 2, bounded run waiting, durable request IDs, saved run previews/result pagination, logical-parent state aggregation, policy cwd/matching-rule reporting and scoped doctor checks. Local evidence is recorded in `qualities/evidence/34-40-macos.md`: Rust contract/integration tests, Mojo validator/process probes, strict Clippy/fmt, site build/links and isolated install smoke pass on macOS. Linux evidence remains pending CI. Discovery producers, aggregate discovery artifacts and future adapter compatibility spikes remain outside these core command implementations. Remote Issues are not automatically closed by these checks.

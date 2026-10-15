@@ -46,12 +46,14 @@ pub fn evaluate(config: &Config, plan: &ExecutionPlan) -> Result<PolicyDecision,
         .iter()
         .filter(|r| r.command == dto.program && dto.args.starts_with(&r.args_prefix))
         .collect();
+    let matching_rule_ids: Vec<String> = matched.iter().map(|r| r.id.clone()).collect();
     // Explicit Deny retains its reason and rule ID even for shell invocations.
     if let Some(rule) = matched.iter().find(|r| r.effect == PolicyEffect::Deny) {
         return Ok(PolicyDecision {
             effect: PolicyEffect::Deny,
             reason: "matched rule".into(),
             rule_id: Some(rule.id.clone()),
+            matching_rule_ids: matching_rule_ids.clone(),
         });
     }
     // A generic Allow cannot authorize shell evaluation; an explicit rule is mandatory.
@@ -60,6 +62,7 @@ pub fn evaluate(config: &Config, plan: &ExecutionPlan) -> Result<PolicyDecision,
             effect: PolicyEffect::Deny,
             reason: "shell evaluation requires an explicit rule".into(),
             rule_id: None,
+            matching_rule_ids: matching_rule_ids.clone(),
         });
     }
     for effect in [PolicyEffect::Ask, PolicyEffect::Allow] {
@@ -70,6 +73,7 @@ pub fn evaluate(config: &Config, plan: &ExecutionPlan) -> Result<PolicyDecision,
                 effect,
                 reason: "matched rule".into(),
                 rule_id: Some(rule.id.clone()),
+                matching_rule_ids: matching_rule_ids.clone(),
             });
         }
     }
@@ -77,6 +81,7 @@ pub fn evaluate(config: &Config, plan: &ExecutionPlan) -> Result<PolicyDecision,
         effect: PolicyEffect::Ask,
         reason: "no matching rule; approval required".into(),
         rule_id: None,
+        matching_rule_ids: matching_rule_ids.clone(),
     })
 }
 /// The caller passes an explicit interactive approval result. Noninteractive Ask always fails.

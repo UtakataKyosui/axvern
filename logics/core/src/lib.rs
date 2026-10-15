@@ -2,6 +2,8 @@
 pub mod adapters;
 pub mod config;
 pub mod doctor;
+pub mod parents;
 pub mod policy;
+pub mod results;
 pub mod services;
 pub mod store;

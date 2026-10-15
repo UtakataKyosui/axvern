@@ -23,4 +23,22 @@ Rules match the program string exactly and an argv prefix, with Deny > Ask > All
 
 `execution.pueue_config` is required for backend commands, and must be an absolute existing file. No implicit Pueue project config is used. This trusted file must configure the POSIX shell described in [setup](/getting-started). Its canonical path names the queue namespace; changing its daemon/socket target in place is unsupported. Use a new path/store when changing queues.
 
-Store directories are created with 0700 and files with 0600. Symlink/unsafe ancestors are refused. Records are atomic JSON documents (`schema_version=1`) guarded by an OS lock. Unknown store schemas fail without overwriting them. There is no automatic migration or retention policy yet; stop axvern clients and back up the private store before any manual maintenance. The core API `prune_before(UNIX_SECONDS)` removes metadata only, not daemon tasks or logs; CLI cleanup is not yet exposed. Removing metadata loses execution-ID lookup. Pueue's own `clean`/`reset`/retention can remove logs independently.
+Store directories are created with 0700 and files with 0600. Symlink/unsafe ancestors are refused. Metadata, durable request reservations and result manifests use independent schema-1 documents and OS locks/atomic publication/fsync. Old metadata remains readable; no past logs are captured retroactively. JSON response schema 2 does not change the config schema.
+
+```toml
+[results]
+retention_seconds = 604800
+capacity_bytes = 1073741824
+max_artifact_bytes = 67108864
+
+[discovery]
+max_items = 10000
+max_entries = 100000
+timeout_ms = 60000
+```
+
+Result retention accepts 1h–365 days; capacity 1MiB–1TiB; artifact limit 1KiB–1GiB and no greater than capacity. Set both capacity and artifact limit when lowering capacity. Completion time starts retention; reads never extend it. Expired results are removed first, then oldest completed results (completion second/ID order) to obtain capacity. Active spool reservations count toward capacity and are not evicted. Preview capture stops at its reserved byte budget and records truncation while the target continues. Metadata and tombstones count toward used bytes and are not automatically removed; filesystem allocation overhead is not a quota guarantee. Storage exhaustion refuses new work when detected before registration and otherwise records a result failure separately from target failure.
+
+Discovery limits are validated/stored for future integrations: max_items 1–100000, max_entries at least max_items and at most 1000000, timeout_ms 1000–600000. They do not enable discovery commands or limit arbitrary run durations.
+
+History, request IDs and tombstones have no automatic TTL. The legacy `prune_before` metadata API refuses to run once request reservations exist; no deletion CLI is exposed. Stop clients/workers and back up the private store before manual maintenance. Do not remove request records to recover space and then resend old keys: that would defeat duplicate prevention. Active manifests left by killed runners require explicit manual investigation; they are never silently evicted/reexecuted. Pueue's own clean/reset/retention is independent of captured run results.

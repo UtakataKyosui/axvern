@@ -1,61 +1,76 @@
-# CLI contract (schema 1)
+# CLI contract (schema 2)
 
-Global options `--config PATH` and `--format human|json` can precede or follow the subcommand, before the target `--`. Default format: human. Duplicate or unknown options are errors. No pager or ANSI color is emitted. `--help` and `--version` are standalone informational flags.
+The default output is JSON. This is an explicit change from schema 1's human default; scripts must check `schema_version=2`. Use `--format human` for readable output. Configuration and metadata files keep their independent schema version 1. Global `--config PATH` and `--format json|human` can precede or follow a command, before target `--`. Unknown/duplicate options are errors. No pager or color is used. Human data escapes control characters.
 
 ```text
-axvern run [--cwd PATH] -- <program> [args...]
-axvern status <execution-id>
-axvern wait <execution-id> [--timeout 30s]
+axvern run [--cwd PATH] [--wait 1s] [--request-id KEY] -- PROGRAM [ARGS...]
+axvern status EXECUTION_ID
+axvern wait EXECUTION_ID [--timeout 30s]
+axvern result EXECUTION_ID [--cursor TOKEN] [--limit 100] [--max-bytes 65536]
 axvern history [--limit 20]
-axvern doctor
-axvern policy check -- <program> [args...]
+axvern doctor [--scope core|discovery|logs|performance|all]
+axvern policy check [--cwd PATH] -- PROGRAM [ARGS...]
 ```
 
-`run` requires `--`; everything after it is native target argv, including empty strings and axvern-looking options. cwd defaults to the invoking directory; a supplied path is resolved to an existing absolute directory. UTF-8 without NUL is required at the backend/JSON boundary. Limits: 256 arguments, 4096 program bytes, 65536 bytes per argument; OS command-size limits still apply.
+## Registration and waiting
 
-Ask prompts on stderr only when both stdin and stderr are terminals. Only `y`, `Y`, or `yes` approves; other answers/EOF refuse. JSON mode does not grant approval. Deny always refuses. `policy check` reports a decision without registering anything and exits 0 even for Deny.
+Target argv after `--` preserves empty strings, spaces, newlines, quotes, Unicode and flag-like arguments. Limits remain 256 arguments, 4096 program bytes, 65536 bytes per argument; UTF-8 without NUL is required. cwd resolves to an existing absolute directory. Policy matches the original program/argv, before the internal result runner is registered with Pueue. Ask requires both stdin and stderr terminals and explicit `y`, `Y` or `yes`; the prompt is on stderr. Deny and noninteractive Ask never register a task.
 
-`wait` defaults to 30 seconds. Accepted units: integer `ms`, `s`, `m`; range 1ms–24h inclusive. Zero, negative, fractional, bare numbers, and overflow are errors. Polling is at most once per 20ms plus backend latency. Each backend request has a 5s cap, shortened to the remaining wait budget. Timeout and Ctrl-C interrupt the client only; they do not stop the daemon task. Ctrl-C follows normal Unix signal termination; no JSON response is promised after a signal.
+`run --wait` defaults to 1s, accepts integer `ms`, `s`, `m`, from zero through 24h. The budget starts after registration. Zero skips observation and leaves state null. At the deadline, return the ID and last observed state; the task continues. A successfully registered/responded-to run exits 0 even if its target fails. A result-store failure is separate from target failure.
 
-`history` defaults to 20, accepts 1–1000, and rejects zero. Order: registered UNIX second descending, then execution ID descending for ties. It contains only local axvern records, with current backend snapshots where available. Removed/reused task IDs have `error.code=expired`; daemon failure preserves metadata with per-entry errors and a top-level `partial_result` (exit 11). An empty store returns an empty array, even offline. No automatic TTL or capacity eviction occurs.
+`--request-id` accepts 1–128 ASCII alphanumeric characters plus `. _ : -`. Within one store, the same key plus the same program, argv and resolved cwd returns the existing execution ID. Wait/format, inherited environment, executable contents and later Policy changes do not change that identity. An existing reservation does not request new approval. Use a new key for an intentional rerun. Different input is `request_conflict` (15). Reservations are fsynced before `add`, serialized across clients, and never automatically deleted. An ambiguous registration returns `registration_unknown` (14) and its execution ID/queue label; a retry never calls `add` again. Reconcile manually with the dedicated Pueue queue. This is conservative at-most-once submission, not a distributed exactly-once guarantee.
 
-## Output and exit status
+`wait --timeout` defaults to 30s, accepts integer `ms`, `s`, `m`, 1ms–24h. Zero, negative, fractional, bare and overflowing values are rejected before lookup. Polling is 250ms plus backend latency; each request is capped at 5s or the remaining budget. Timeout returns 124 with the latest observed state, if any. Target failure returns 10 and preserves its numeric exit code in JSON. Ctrl-C interrupts only the client (Unix signal semantics, usually 130); a complete JSON line is not promised after a signal.
 
-JSON stdout is exactly one response plus newline; diagnostics are fields, without stderr logging. Human results go to stdout and errors to stderr. Doctor's check explanations/remedies are result data on stdout. Child stdout/stderr are never forwarded by these commands. Common fields are always present; unavailable values are `null`:
+## JSON, status and history
+
+JSON stdout is one UTF-8 object plus LF. Diagnostics are in `error`/result data; only approval prompts use stderr. Every response has `schema_version`, `command`, `execution_id`, `state`, `exit_code`, `output`, `error`. Unavailable values are null. Target exit code is distinct from CLI exit status.
 
 ```json
-{"schema_version":1,"execution_id":"ex_550e8400-e29b-41d4-a716-446655440000","state":null,"exit_code":null,"output":null,"error":{"code":"task_not_found","message":"unknown axvern execution"}}
+{"schema_version":2,"command":"run","execution_id":"ex_550e8400-e29b-41d4-a716-446655440000","state":"running","exit_code":null,"output":{"result_availability":"pending","result":null},"error":null}
 ```
 
-`run.output.record` contains `execution_id`, `backend` (`queue`, `task_id`, `created_at`), `registered_at` (UNIX seconds), and `cwd`. Registration leaves top-level state/exit_code null because state may change immediately. `status`/`wait.output` contains `record`, `task`, `error`; task has identity, state, child exit_code, started_at, finished_at. `history.output.executions` is an array of these views.
+IDs are `ex_` plus lowercase UUIDv4; integer Pueue IDs are not accepted. `status` verifies queue namespace, task ID and creation identity. Deleted/reused mappings return `expired` (8). Queued/Stashed/Locked become `queued`; Running/Paused become `running`; successful completion is `done`; Failed/Killed/Errored/DependencyFailed/FailedToSpawn become `failed`. Unknown backend states fail closed. Missing numerical child exits and unobserved times remain null. A successfully inspected failed target gives CLI exit 0. `status`/`wait.output` includes `kind`, `record`, `task`, `source=backend`, `observed_at` (Unix seconds) and `result_availability`; it does not include the result body. Persisted logical parents (created through the core API) aggregate their concrete children: all queued → queued; any unfinished → running; all successful → done; mixed success/failure → partial; no successes → failed. Parent wait returns 11 for partial, 10 for failed, without inventing a numeric aggregate exit code. Status/history return child IDs and observations. The discovery command that creates these parents and its aggregate result artifact remain future work.
 
-States: Queued/Stashed/Locked → `queued`; Running/Paused → `running`; Done Success → `done`, exit 0; Failed/Killed/Errored/DependencyFailed/FailedToSpawn → `failed`. Child exit code is null before completion and when no numeric exit exists. Start/end timestamps retain Pueue's timestamp strings; absent timestamps are null. `partial` is reserved for future aggregate results, not a child state. v0.2 parent analysis IDs/results are outside this v0.1 contract.
+`history` accepts 1–1000 rows (default 20), ordered by registration second descending, then ID descending. It returns local records only, without argv, environment or logs. Each row includes its record/cwd, task/error, command and result availability. Removed backend tasks remain as expired rows. Offline nonempty history returns metadata/per-row errors and `partial_result` (11); an empty store succeeds offline. Corrupt records fail rather than disappearing. Result expiry does not delete history or request reservations.
 
-| CLI exit | Meaning |
-| --- | --- |
-| 0 | Registered, inspected, completed successfully, history available (including expired rows), doctor Pass/Warning, or policy evaluated |
-| 1 | Backend/protocol/unsupported Pueue version failure |
-| 2 | Invalid input/encoding |
-| 3 | Invalid/missing selected configuration |
-| 4 | Permissions unsafe/denied |
-| 5 | Pueue executable missing |
-| 6 | Daemon state unavailable |
-| 7 | Unknown local execution ID |
-| 8 | Known mapping expired (deleted/reused/other queue) |
-| 9 | Policy/approval refused |
-| 10 | `wait` observed child failure; numeric child exit remains in JSON |
-| 11 | Partial history/output unavailable |
-| 12 | Doctor has one or more Fail checks |
-| 13 | Store I/O/schema failure |
-| 14 | Registration outcome unknown; never blindly retry |
-| 124 | Wait/backend timeout; task not stopped |
+## Saved run results
 
-`status` exits 0 for a successfully inspected failed child; `wait` exits 10. A child exit of 23 is `exit_code:23`, not CLI exit 23. Error messages are diagnostic text, not a stable enum; error codes and schema fields are the machine contract.
+The internal runner captures a bounded combined stdout/stderr preview and publishes an immutable result before completing its Pueue task. It also forwards the combined log to Pueue. Keep the installed axvern executable available at the same path until queued tasks finish. `result` reads saved bytes without executing the target or consuming/refreshing the result; it works after Pueue cleans the task/log. Legacy registrations have no captured result.
 
-If registration succeeds but persistence fails, the error response retains `output.registration_receipt` and the execution ID. Preserve it privately; repair the store and save that receipt using the core store API. No public automatic recovery command exists yet. On `registration_unknown`, use the nonce label in the error with Pueue to reconcile manually. Retrying `run` is a fresh registration, not an idempotency mechanism.
+An immediately completed run and later `result` use the same result structure: `kind=run`, `summary` (target exit, stream, completion second), `items`, `completeness`, `errors`, `warnings`, `page`. Text fragments carry `item_id`, sequential `fragment_index`, and `continued`. Unicode characters are never split across returned fragments; invalid UTF-8 is reported explicitly. stdout/stderr are labelled `combined`, not falsely separated.
+
+A page returns at most 100 fragments (default 100, range 1–100) and 64KiB including its JSON envelope and LF (`--max-bytes` range 1024–65536). Escaped JSON size is counted. Cursors belong to one immutable execution artifact. Replay returns the same page while retained. `has_more`/`next_cursor` describe saved pages; `completeness.truncated` separately describes the preview's capture limit. An undersized response is `output_limit_too_small` (11).
+
+Availability is `pending`, `available`, `expired`, `evicted` or `unavailable`. Pending results are null. Expiry and capacity eviction return distinct typed errors (11), never rerun the target, and retain tombstones. A successfully fetched result exits 0 even when the target exited 23. A killed/crashed runner can leave an active reservation; automatic repair/reexecution is deliberately unavailable.
 
 ## Doctor
 
-`doctor.output` contains `level` and `checks`; each check has `name`, `level`, `message`, `remedy` (nullable). Levels are `pass`, `warning`, `fail`; Fail dominates Warning dominates Pass. A missing CLI, wrong Pueue version, invalid config/policy, unsafe store, or unavailable daemon is Fail. Unverifiable owned logs and unavailable project-only tools are Warning. Runtime dependency: Pueue 4.0.4; future phase tools are not required.
+Default scope `core` checks configuration/Policy, private store, Pueue 4.0.4, daemon and a bounded owned-log probe. `logs` includes the same log checks. `discovery` also probes eza/fd/rg/bat/ast-grep/tokei; `performance` probes hyperfine; `all` probes both and reports optional integrations unavailable. Those future command integrations are explicitly reported as unprovided; a successful version probe does not promise tool compatibility. Required missing/failed probes are Fail, optional integrations/project tools are Warning. Fail dominates Warning dominates Pass; Fail exits 12, others 0. Invalid config is a check failure, with further feasible checks continued.
 
-Daemon calls have a 5s timeout each. Log probing uses at most one owned task and never returns its content. Store diagnosis validates records and read/write/fsync through a dedicated scratch file, then removes it. It may create private store directories and a lock file, but never changes execution records, pending writer files, or Pueue tasks. Devbox/Moon/Cargo/pnpm are probed only when the current directory contains their corresponding `devbox.json`/`.moon`/`Cargo.toml`/`package.json` marker. Additional diagnostics can extend the structured check list.
+Each external probe has a 5s limit, capped by the overall 30s probe deadline. Devbox/Moon/Cargo/pnpm are checked only for corresponding project markers. Store scratch tests read/write/fsync and clean up. Private directories/lock files may be created; existing task/record data is not changed. Log contents are not returned. Each failure/warning includes a remedy. Doctor never installs tools, starts daemons, uses sudo or repairs data.
+
+## CLI exit codes
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Successful registration/inspection/result retrieval; target may have failed |
+| 1 | Backend/protocol failure |
+| 2 | Invalid input, encoding or cursor |
+| 3 | Invalid/missing selected configuration |
+| 4 | Permissions unsafe/denied |
+| 5 | Required executable missing |
+| 6 | Daemon unavailable |
+| 7 | Unknown local execution ID |
+| 8 | Backend mapping expired/reused/foreign |
+| 9 | Policy/approval refused |
+| 10 | Explicit wait observed target failure |
+| 11 | Partial history, missing/expired/evicted result, output limit too small |
+| 12 | Doctor Fail |
+| 13 | Store I/O/schema/capacity failure |
+| 14 | Registration outcome unknown; never blindly resubmit |
+| 15 | Request ID conflict |
+| 16 | Unsupported capability |
+| 124 | Explicit wait/backend timeout; task is not stopped |
+
+The error code is stable; its message is display text and does not quote secret argv/config values. Registration persistence errors retain a receipt where available. Preserve it privately and repair metadata without registering again.

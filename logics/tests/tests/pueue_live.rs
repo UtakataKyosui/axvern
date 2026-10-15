@@ -290,7 +290,7 @@ fn public_cli_execute_doctor_and_history_contracts() {
         assert_eq!(denied["error"]["code"], "policy_denied");
     }
     assert_eq!(q.adapter.list().unwrap(), before);
-    let human = public_cli(&q, &config, &["run", "--", "false"]);
+    let human = public_cli(&q, &config, &["run", "--format", "human", "--", "false"]);
     assert_eq!(human.stdout, b"");
     assert_eq!(
         human.stderr,
@@ -300,7 +300,7 @@ fn public_cli_execute_doctor_and_history_contracts() {
     let unknown_json = cli_json(&q, &config, &["status", unknown, "--format", "json"], 7);
     assert_eq!(
         unknown_json,
-        serde_json::json!({"schema_version":1,"execution_id":unknown,"state":null,"exit_code":null,"output":null,"error":{"code":"task_not_found","message":"unknown axvern execution"}})
+        serde_json::json!({"schema_version":2,"command":"status","execution_id":unknown,"state":null,"exit_code":null,"output":null,"error":{"code":"task_not_found","message":"unknown axvern execution"}})
     );
     for args in [
         vec!["history", "--limit", "0", "--format", "json"],
@@ -415,6 +415,27 @@ fn public_cli_execute_doctor_and_history_contracts() {
         limited["output"]["executions"][0],
         history["output"]["executions"][0]
     );
+    let parent = ParentRecord {
+        execution_id: ExecutionStore::allocate_id().unwrap(),
+        registered_at: u64::MAX - 1,
+        cwd: q._temp.path().to_str().unwrap().into(),
+        children: vec![id.parse().unwrap(), failed_id.parse().unwrap()],
+    };
+    let local_store = ExecutionStore::open(&store_path).unwrap();
+    axvern_core::parents::save(&local_store, &parent).unwrap();
+    let parent_id = parent.execution_id.to_string();
+    let aggregate = cli_json(&q, &config, &["status", &parent_id], 0);
+    assert_eq!(aggregate["state"], "partial");
+    assert_eq!(aggregate["output"]["children"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        cli_json(&q, &config, &["wait", &parent_id], 11)["state"],
+        "partial"
+    );
+    assert_eq!(
+        cli_json(&q, &config, &["history", "--limit", "1"], 0)["output"]["executions"][0]["record"]
+            ["execution_id"],
+        parent_id
+    );
     // Doctor leaves even abandoned writer scratch untouched.
     let pending = store_path.join("untouched.pending");
     fs::write(&pending, b"keep").unwrap();
@@ -452,7 +473,7 @@ fn public_cli_execute_doctor_and_history_contracts() {
             .unwrap()
             .contains("start pueued --config")
     );
-    let human = public_cli(&q, &config, &["doctor"]);
+    let human = public_cli(&q, &config, &["doctor", "--format", "human"]);
     assert_eq!(human.status.code(), Some(12));
     assert!(String::from_utf8_lossy(&human.stdout).contains("pueue_daemon: fail"));
     assert!(String::from_utf8_lossy(&human.stdout).contains("start pueued --config"));
@@ -464,7 +485,7 @@ fn public_cli_execute_doctor_and_history_contracts() {
             .as_array()
             .unwrap()
             .len(),
-        2
+        3
     );
 }
 
@@ -522,4 +543,79 @@ fn terminal_ask_requires_an_explicit_yes() {
         }
         assert_eq!(q.adapter.list().unwrap().len(), count);
     }
+}
+
+#[test]
+fn schema_two_keyed_run_replays_after_policy_change_and_backend_log_deletion() {
+    let q = Queue::new();
+    let config = q._temp.path().join("v2.toml");
+    let base = format!(
+        "schema_version=1\n[execution]\npueue_config={}\nstore={}\n",
+        serde_json::to_string(&q.adapter.config).unwrap(),
+        serde_json::to_string(&q._temp.path().join("store")).unwrap()
+    );
+    fs::write(
+        &config,
+        format!("{base}[[policy.rules]]\nid='python'\ncommand='python3'\neffect='allow'\n"),
+    )
+    .unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    let args = [
+        "run",
+        "--request-id",
+        "one",
+        "--wait",
+        "0s",
+        "--",
+        "python3",
+        "-c",
+        "import time; time.sleep(0.6); print('保存済み'); raise SystemExit(23)",
+    ];
+    let first = cli_json(&q, &config, &args, 0);
+    assert_eq!(first["schema_version"], 2);
+    assert_eq!(first["command"], "run");
+    assert_eq!(first["state"], serde_json::Value::Null);
+    let id = first["execution_id"].as_str().unwrap();
+    let observed = cli_json(&q, &config, &["wait", id, "--timeout", "100ms"], 124);
+    assert!(observed["state"] == "running" || observed["state"] == "queued");
+    let completed = cli_json(&q, &config, &["wait", id, "--timeout", "10s"], 10);
+    assert_eq!(completed["exit_code"], 23);
+    assert_eq!(completed["output"]["result_availability"], "available");
+    let saved = cli_json(&q, &config, &["result", id], 0);
+    assert_eq!(saved["output"]["result"]["items"][0]["text"], "保存済み\n");
+    q.client(&["clean"]);
+    assert_eq!(
+        cli_json(&q, &config, &["result", id], 0)["output"],
+        saved["output"]
+    );
+    // A replay is a reference to the original execution, even under a new Deny rule.
+    fs::write(
+        &config,
+        format!("{base}[[policy.rules]]\nid='python'\ncommand='python3'\neffect='deny'\n"),
+    )
+    .unwrap();
+    let replay = cli_json(&q, &config, &args, 0);
+    assert_eq!(replay["execution_id"], id);
+    // With --wait 0s a completed execution reports its saved result, never "pending".
+    assert_eq!(replay["state"], "failed");
+    assert_eq!(replay["exit_code"], 23);
+    assert_eq!(replay["output"]["result_availability"], "available");
+    assert_eq!(replay["output"]["record"]["execution_id"], id);
+    assert_eq!(replay["output"]["result"]["items"][0]["text"], "保存済み\n");
+    assert!(q.adapter.list().unwrap().is_empty());
+    let conflict = cli_json(
+        &q,
+        &config,
+        &[
+            "run",
+            "--request-id",
+            "one",
+            "--",
+            "python3",
+            "-c",
+            "print('different')",
+        ],
+        15,
+    );
+    assert_eq!(conflict["error"]["code"], "request_conflict");
 }

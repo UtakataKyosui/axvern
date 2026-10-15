@@ -1,0 +1,28 @@
+# Issue #34–#40 implementation evidence
+
+Date: 2026-10-15. Platform: macOS arm64. Rust 1.98.0, Pueue 4.0.4, Node 24.22.0. Tests use private temporary configurations, sockets and stores; no user queue or remote Issue state is changed.
+
+## Implemented contracts
+
+- #34: response schema 2 with command, JSON default, escaped human text, independent config/store schema 1; strict results/discovery limit configuration; bounded saved run previews, retention/capacity tombstones and cursor pages. The supporting `result` command is included so run results can actually be retrieved. Future fs/code/log/performance producers remain unprovided.
+- #35: default 1s post-registration wait, 0s immediate response, durable request reservations, input conflict (15), concurrent at-most-once submission, ambiguous registration (14) without automatic retry, and original-target Policy evaluation. Worker captures/atomically publishes the combined preview before its Pueue task finishes. Inherited environment/executable/Policy changes do not change an existing request identity.
+- #36: child ownership/state normalization and result availability; persisted logical parents with all-queued/running/done/partial/failed aggregation and child views. Parent records can be created by the core API; the future fs analyze producer and its aggregate result artifact are not provided by this work.
+- #37: 250ms polling, remaining-budget subprocess deadlines, latest observed state on timeout, target failure exit 10 and aggregate partial exit 11. Waiting does not stop or resubmit work. Inherited backend pipes cannot extend the probe deadline.
+- #38: registration-time/ID ordering, mixed concrete/parent history, result availability, expired mappings retained, offline partial metadata, and corrupt record failures. History/request tombstones do not follow result TTL. Legacy pruning refuses request/parent records.
+- #39: policy cwd validation and matching_rule_ids in configuration order; existing precedence/shell refusal/exact program matching retained. No approval UI, target execution or daemon connection for policy check.
+- #40: core/discovery/logs/performance/all scopes, required/optional distinction, feature availability, bounded version probes, 30s total external-probe budget, config failure as a check and scratch cleanup. Future integrations are explicitly unprovided; version-probe success alone is not a compatibility guarantee.
+
+## Verification
+
+- Rust: 41 tests passed in the final workspace suite, including four real isolated Pueue tests.
+- Regression tests cover capacity shared by concurrent registrations without a request ID (exactly one of eight succeeds, the rest are refused with `storage_full`), `--wait 0s` re-reference of a completed keyed run (saved result and `available`, never `pending`), and `doctor` returning within its deadline while another client holds the store lock.
+- New tests exercise concurrent identical request IDs, differing-input conflict, interrupted-process durable intent, no resubmission, configuration limits, Unicode/control-character page reconstruction at an exact 1024-byte JSON budget, replayed pages, foreign cursor rejection, expiry tombstones, capacity eviction, active spool protection, and parent state aggregation.
+- Pueue integration verifies immediate return, explicit wait timeout followed by completion, argv/cwd fidelity, target exit 23, result retrieval after backend cleanup, policy-change replay, and parent status/wait/history partial state.
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `git diff --check` pass.
+- Mojo 1.1.0 contract evaluator: compile, 55 validator fixtures, process-boundary self-tests, and 33 CLI probes across seven rule groups pass. Existing locked development dependencies were installed under ignored target directories. Sandbox execution traps in the compiler; normal-permission execution passes.
+- Site: Biome check and Rspress production build pass; 19 local documentation links pass. Used existing pnpm 12.6.0 with the frozen lockfile; the repository's preferred pnpm 12.11.2 was unavailable. No lockfile/package change.
+- Release smoke: release build, private temporary Cargo install, version/help and noninteractive refusal pass. No publication/deployment.
+
+## Operational boundaries
+
+Linux acceptance remains pending CI. Pueue retains full raw logs independently; saved results are bounded combined previews. Keep the axvern runner binary at its registered path until queued tasks finish. A killed runner can leave an active spool reservation; investigate manually rather than silently deleting/resubmitting it. Metadata/tombstones are not automatically pruned, and disk allocation overhead is not an absolute quota guarantee. New work is refused on detected metadata capacity exhaustion; later persistence failure is distinct from target failure. Discovery/performance tool compatibility requires the corresponding future adapter spikes. This file records local implementation evidence, not remote Issue closure or release approval.

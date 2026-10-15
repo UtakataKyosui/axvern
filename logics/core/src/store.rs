@@ -7,7 +7,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 fn fail() -> Error {
@@ -35,7 +35,7 @@ fn secure(path: &Path, directory: bool) -> Result<(), Error> {
 }
 #[derive(Clone, Debug)]
 pub struct ExecutionStore {
-    root: PathBuf,
+    pub(crate) root: PathBuf,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,11 +43,24 @@ struct Document {
     schema_version: u32,
     record: ExecutionRecord,
 }
+/// Durable intent is published before `add`. An unresolved intent is never retried.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestReservation {
+    pub schema_version: u32,
+    pub execution_id: ExecutionId,
+    pub plan: JsonExecutionPlan,
+    pub record: Option<ExecutionRecord>,
+}
 impl ExecutionStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, Error> {
-        Self::open_internal(root.into(), true)
+        Self::open_internal(root.into(), true, None)
     }
-    fn open_internal(root: PathBuf, recover: bool) -> Result<Self, Error> {
+    fn open_internal(
+        root: PathBuf,
+        recover: bool,
+        deadline: Option<Instant>,
+    ) -> Result<Self, Error> {
         if !root.is_absolute() {
             return Err(Error::new(
                 ErrorCode::InvalidInput,
@@ -75,7 +88,10 @@ impl ExecutionStore {
         }
         secure(&root, true)?;
         let store = Self { root };
-        let _lock = store.lock()?;
+        let _lock = match deadline {
+            Some(deadline) => store.lock_until(deadline)?,
+            None => store.lock()?,
+        };
         // A killed writer can leave only unpublished scratch, never a partial record.
         for entry in io(fs::read_dir(&store.root))? {
             let path = io(entry)?.path();
@@ -88,8 +104,11 @@ impl ExecutionStore {
     }
     /// Dedicated scratch only; no record or abandoned writer scratch is changed.
     pub fn diagnose(root: PathBuf) -> Result<(), Error> {
-        let store = Self::open_internal(root, false)?;
-        let _lock = store.lock()?;
+        Self::diagnose_until(root, Instant::now() + Duration::from_secs(30))
+    }
+    pub fn diagnose_until(root: PathBuf, deadline: Instant) -> Result<(), Error> {
+        let store = Self::open_internal(root, false, Some(deadline))?;
+        let _lock = store.lock_until(deadline)?;
         store.records()?;
         let path = store
             .root
@@ -114,12 +133,19 @@ impl ExecutionStore {
         })();
         // Always attempt cleanup, including failed I/O. Report cleanup failures too.
         let cleanup = io(fs::remove_file(&path));
-        result.and(cleanup)
+        result.and(cleanup)?;
+        drop(_lock);
+        crate::parents::history_until(&store, deadline).map(|_| ())
     }
-    pub(crate) fn diagnostic_history(root: PathBuf) -> Result<Vec<ExecutionRecord>, Error> {
-        Self::open_internal(root, false)?.history()
+    pub(crate) fn diagnostic_history(
+        root: PathBuf,
+        deadline: Instant,
+    ) -> Result<Vec<ExecutionRecord>, Error> {
+        let store = Self::open_internal(root, false, Some(deadline))?;
+        let _lock = store.lock_until(deadline)?;
+        store.records()
     }
-    fn lock(&self) -> Result<File, Error> {
+    fn lock_file(&self) -> Result<File, Error> {
         secure(&self.root, true)?;
         let path = self.root.join("store.lock");
         if path.symlink_metadata().is_ok() {
@@ -133,8 +159,31 @@ impl ExecutionStore {
             .mode(0o600)
             .open(&path))?;
         secure(&path, false)?;
+        Ok(file)
+    }
+    pub(crate) fn lock(&self) -> Result<File, Error> {
+        let file = self.lock_file()?;
         io(file.lock())?;
         Ok(file)
+    }
+    pub(crate) fn lock_until(&self, deadline: Instant) -> Result<File, Error> {
+        let file = self.lock_file()?;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(file),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(Error::new(
+                            ErrorCode::Timeout,
+                            "store lock deadline exceeded",
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10).min(remaining));
+                }
+                Err(_) => return Err(fail()),
+            }
+        }
     }
     fn path(&self, id: &ExecutionId) -> PathBuf {
         self.root.join(format!("{id}.json"))
@@ -156,6 +205,10 @@ impl ExecutionStore {
         .parse()
     }
     pub fn save_record(&self, record: &ExecutionRecord) -> Result<(), Error> {
+        let _lock = self.lock()?;
+        self.save_record_locked(record)
+    }
+    fn save_record_locked(&self, record: &ExecutionRecord) -> Result<(), Error> {
         if record.cwd.is_empty()
             || record.backend.queue.is_empty()
             || record.backend.created_at.is_empty()
@@ -165,7 +218,6 @@ impl ExecutionStore {
                 "incomplete execution metadata",
             ));
         }
-        let _lock = self.lock()?;
         let final_path = self.path(&record.execution_id);
         if final_path.symlink_metadata().is_ok() {
             let existing = self.read(&record.execution_id)?;
@@ -207,7 +259,7 @@ impl ExecutionStore {
         io(fs::rename(pending, final_path))?;
         io(io(File::open(&self.root))?.sync_all())
     }
-    fn read(&self, id: &ExecutionId) -> Result<ExecutionRecord, Error> {
+    pub(crate) fn read(&self, id: &ExecutionId) -> Result<ExecutionRecord, Error> {
         let path = self.path(id);
         if !path.try_exists().map_err(|_| fail())? {
             return Err(Error::new(
@@ -262,6 +314,21 @@ impl ExecutionStore {
     /// Explicit metadata-only cleanup. Does not delete Pueue tasks or logs.
     pub fn prune_before(&self, timestamp: u64) -> Result<usize, Error> {
         let _lock = self.lock()?;
+        if self.root.join("requests").exists()
+            || self.root.join("registrations").exists()
+            || io(fs::read_dir(&self.root))?.any(|entry| {
+                entry.is_ok_and(|e| {
+                    e.path()
+                        .extension()
+                        .is_some_and(|e| e == "request" || e == "parent")
+                })
+            })
+        {
+            return Err(Error::new(
+                ErrorCode::StoreFailure,
+                "request-id or parent records prevent metadata pruning",
+            ));
+        }
         let records = self.records()?;
         let mut removed = 0;
         for record in records.into_iter().filter(|r| r.registered_at < timestamp) {
@@ -274,6 +341,186 @@ impl ExecutionStore {
     pub fn resolve(&self, id: &ExecutionId, adapter: &PueueAdapter) -> Result<TaskSnapshot, Error> {
         adapter.inspect_owned(&self.find_record(id)?.backend)
     }
+    fn request_path(&self, key: &str) -> Result<PathBuf, Error> {
+        if key.is_empty()
+            || key.len() > 128
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+        {
+            return Err(Error::new(ErrorCode::InvalidInput, "invalid request-id"));
+        }
+        // Split the encoding to stay below filesystem NAME_MAX for 128 byte keys.
+        let encoded: String = key.bytes().map(|b| format!("{b:02x}")).collect();
+        let dir = self.root.join("requests");
+        match fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(_) => return Err(fail()),
+        }
+        secure(&dir, true)?;
+        let split = encoded.len().min(16);
+        let bucket = dir.join(&encoded[..split]);
+        match fs::DirBuilder::new().mode(0o700).create(&bucket) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(_) => return Err(fail()),
+        }
+        secure(&bucket, true)?;
+        Ok(bucket.join(format!("{}.request", &encoded[split..])))
+    }
+    fn read_request(&self, path: &Path) -> Result<Option<RequestReservation>, Error> {
+        match path.symlink_metadata() {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(fail()),
+            Ok(_) => (),
+        }
+        secure(path, false)?;
+        let mut bytes = Vec::new();
+        io(io(File::open(path))?
+            .take(128 * 1024 * 1024)
+            .read_to_end(&mut bytes))?;
+        let request: RequestReservation = serde_json::from_slice(&bytes).map_err(|_| fail())?;
+        if request.schema_version != 1
+            || request.record.as_ref().is_some_and(|r| {
+                r.execution_id != request.execution_id || r.cwd != request.plan.cwd
+            })
+        {
+            return Err(fail());
+        }
+        Ok(Some(request))
+    }
+    fn publish_request(&self, path: &Path, request: &RequestReservation) -> Result<(), Error> {
+        let scratch = path.with_extension("scratch");
+        if scratch.symlink_metadata().is_ok() {
+            secure(&scratch, false)?;
+            io(fs::remove_file(&scratch))?;
+        }
+        let mut file = io(OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&scratch))?;
+        io(file.write_all(&serde_json::to_vec(request).map_err(|_| fail())?))?;
+        io(file.sync_all())?;
+        io(fs::rename(scratch, path))?;
+        for parent in path.parent().ok_or_else(fail)?.ancestors() {
+            io(io(File::open(parent))?.sync_all())?;
+            if parent == self.root {
+                return Ok(());
+            }
+        }
+        Err(fail())
+    }
+    pub fn request(
+        &self,
+        key: &str,
+        plan: &ExecutionPlan,
+    ) -> Result<Option<RequestReservation>, Error> {
+        let _lock = self.lock()?;
+        let request = self.read_request(&self.request_path(key)?)?;
+        if request
+            .as_ref()
+            .is_some_and(|r| JsonExecutionPlan::try_from(plan).is_ok_and(|p| p != r.plan))
+        {
+            return Err(Error::new(
+                ErrorCode::RequestConflict,
+                "request-id already refers to different input",
+            ));
+        }
+        Ok(request)
+    }
+    /// Serialized across processes. Authorize/preflight only for a new reservation.
+    pub fn register_request(
+        &self,
+        key: &str,
+        plan: &ExecutionPlan,
+        preflight: impl FnOnce() -> Result<(), Error>,
+        register: impl FnOnce(&ExecutionId) -> Result<BackendIdentity, Error>,
+    ) -> Result<RequestReservation, Error> {
+        let dto = JsonExecutionPlan::try_from(plan)?;
+        let _lock = self.lock()?;
+        let path = self.request_path(key)?;
+        self.register_locked(&path, dto, None, preflight, register)
+    }
+    /// Every CLI submission reserves durable metadata capacity, including calls
+    /// without a user request key. This namespace cannot collide with user keys.
+    pub fn register_intent(
+        &self,
+        id: &ExecutionId,
+        plan: &ExecutionPlan,
+        preflight: impl FnOnce() -> Result<(), Error>,
+        register: impl FnOnce(&ExecutionId) -> Result<BackendIdentity, Error>,
+    ) -> Result<RequestReservation, Error> {
+        let dto = JsonExecutionPlan::try_from(plan)?;
+        let _lock = self.lock()?;
+        let directory = self.root.join("registrations");
+        match fs::DirBuilder::new().mode(0o700).create(&directory) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(_) => return Err(fail()),
+        }
+        secure(&directory, true)?;
+        self.register_locked(
+            &directory.join(format!("{id}.intent")),
+            dto,
+            Some(id.clone()),
+            preflight,
+            register,
+        )
+    }
+    pub fn intent(&self, id: &ExecutionId) -> Result<Option<RequestReservation>, Error> {
+        let _lock = self.lock()?;
+        let directory = self.root.join("registrations");
+        if !directory.try_exists().map_err(|_| fail())? {
+            return Ok(None);
+        }
+        secure(&directory, true)?;
+        self.read_request(&directory.join(format!("{id}.intent")))
+    }
+    fn register_locked(
+        &self,
+        path: &Path,
+        dto: JsonExecutionPlan,
+        id: Option<ExecutionId>,
+        preflight: impl FnOnce() -> Result<(), Error>,
+        register: impl FnOnce(&ExecutionId) -> Result<BackendIdentity, Error>,
+    ) -> Result<RequestReservation, Error> {
+        if let Some(request) = self.read_request(path)? {
+            if request.plan != dto {
+                return Err(Error::new(
+                    ErrorCode::RequestConflict,
+                    "request-id already refers to different input",
+                ));
+            }
+            return Ok(request);
+        }
+        preflight()?;
+        let mut request = RequestReservation {
+            schema_version: 1,
+            execution_id: match id {
+                Some(id) => id,
+                None => Self::allocate_id()?,
+            },
+            plan: dto,
+            record: None,
+        };
+        self.publish_request(path, &request)?;
+        let backend = register(&request.execution_id)?;
+        let record = ExecutionRecord {
+            execution_id: request.execution_id.clone(),
+            backend,
+            registered_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| fail())?
+                .as_secs(),
+            cwd: request.plan.cwd.clone(),
+        };
+        self.save_record_locked(&record)?;
+        request.record = Some(record);
+        self.publish_request(path, &request)?;
+        Ok(request)
+    }
 }
 use std::os::unix::fs::DirBuilderExt;
 
@@ -283,6 +530,7 @@ use std::os::unix::fs::DirBuilderExt;
 pub struct RegistrationFailure {
     pub error: Error,
     pub receipt: Option<Box<ExecutionRecord>>,
+    pub execution_id: Option<ExecutionId>,
 }
 pub fn register_and_save(
     adapter: &mut PueueAdapter,
@@ -292,11 +540,13 @@ pub fn register_and_save(
     let execution_id = ExecutionStore::allocate_id().map_err(|error| RegistrationFailure {
         error,
         receipt: None,
+        execution_id: None,
     })?;
     let cwd = JsonExecutionPlan::try_from(plan)
         .map_err(|error| RegistrationFailure {
             error,
             receipt: None,
+            execution_id: None,
         })?
         .cwd;
     let registered_at = SystemTime::now()
@@ -304,6 +554,7 @@ pub fn register_and_save(
         .map_err(|_| RegistrationFailure {
             error: fail(),
             receipt: None,
+            execution_id: None,
         })?
         .as_secs();
     let backend = adapter
@@ -311,6 +562,7 @@ pub fn register_and_save(
         .map_err(|error| RegistrationFailure {
             error,
             receipt: None,
+            execution_id: None,
         })?;
     let record = ExecutionRecord {
         execution_id,
@@ -323,6 +575,7 @@ pub fn register_and_save(
         .map_err(|error| RegistrationFailure {
             error,
             receipt: Some(Box::new(record.clone())),
+            execution_id: Some(record.execution_id.clone()),
         })?;
     Ok(record)
 }

@@ -24,7 +24,7 @@
     "source": "https://github.com/a2aproject/a2a-cli/blob/main/specification/SPEC.md#12-authentication"
   },
   "AXV-SCHEMA": {
-    "description": "Schema-1 fields, typed errors and exit mapping",
+    "description": "Schema-2 fields, typed errors and exit mapping",
     "source": "sites/axvern-document-site/docs/en/cli.md"
   }
 }

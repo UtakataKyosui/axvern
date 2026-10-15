@@ -1,4 +1,4 @@
-"""Convert untrusted JSON into typed schema-1 values before evaluating cases."""
+"""Convert untrusted JSON into typed schema-2 values before evaluating cases."""
 from std.collections import Optional
 from json import Document, Node, parse_json, require
 
@@ -60,6 +60,13 @@ struct ErrorCode(Copyable, Movable):
             "store_failure",
             "registration_unknown",
             "timeout",
+            "request_conflict",
+            "unsupported_capability",
+            "storage_full",
+            "invalid_cursor",
+            "result_expired",
+            "result_evicted",
+            "output_limit_too_small",
         ]
         var exits: List[Int] = [
             1,
@@ -77,6 +84,13 @@ struct ErrorCode(Copyable, Movable):
             13,
             14,
             124,
+            15,
+            16,
+            13,
+            2,
+            11,
+            11,
+            11,
         ]
         for i in range(len(names)):
             if value == names[i]:
@@ -145,16 +159,18 @@ def validate_response(
     var schema = doc.member(root, "schema_version")
     require(
         doc.nodes[schema].kind == Node.INTEGER
-        and doc.nodes[schema].text == "1",
+        and doc.nodes[schema].text == "2",
         "invalid schema",
     )
+    var command = doc.member(root, "command")
+    require(doc.nodes[command].kind == Node.NULL or doc.nodes[command].kind == Node.STRING, "invalid command")
     var identifier = doc.member(root, "execution_id")
     var state = doc.member(root, "state")
     var child = doc.member(root, "exit_code")
     var output = doc.member(root, "output")
     var error = doc.member(root, "error")
     var result = Response(
-        1,
+        2,
         Optional[ExecutionId](),
         Optional[State](),
         Optional[Int32](),
@@ -173,11 +189,11 @@ def validate_response(
     if doc.nodes[error].kind != Node.NULL:
         var code = ErrorCode(string_value(doc, doc.member(error, "code")))
         var message = string_value(doc, doc.member(error, "message"))
-        require(exit_code == code.exit_code, "error/exit mismatch")
+        require(exit_code == code.exit_code or (exit_code == 0 and doc.nodes[command].kind == Node.STRING and doc.nodes[command].text == "run" and result.execution_id), "error/exit mismatch")
         result.error = ContractError(code^, message)
     else:
         require(
-            exit_code == 0 or exit_code == 10 or exit_code == 12,
+            exit_code == 0 or exit_code == 10 or exit_code == 11 or exit_code == 12,
             "unexpected success exit",
         )
         if exit_code == 10:
@@ -185,6 +201,8 @@ def validate_response(
                 result.state and result.state.value().value == "failed",
                 "exit 10 requires failed child",
             )
+        if exit_code == 11:
+            require(result.state and result.state.value().value == "partial", "exit 11 requires partial parent")
         if exit_code == 12:
             require(
                 result.output

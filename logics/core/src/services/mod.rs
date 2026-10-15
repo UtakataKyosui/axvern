@@ -138,6 +138,154 @@ pub fn authorize(
     Ok(())
 }
 impl ExecutionService {
+    pub(crate) fn target_snapshot(
+        &self,
+        mut task: TaskSnapshot,
+        id: &ExecutionId,
+    ) -> Result<TaskSnapshot, Error> {
+        if matches!(task.state, ChildState::Done | ChildState::Failed)
+            && let Some(m) = crate::results::inspect(&self.store, &self.config.results, id)?
+            && let Some(state) = m.state
+        {
+            task.state = state;
+            task.exit_code = m.exit_code;
+        }
+        Ok(task)
+    }
+    pub fn result_settings(&self) -> &crate::config::Results {
+        &self.config.results
+    }
+    pub fn worker_plan(
+        &self,
+        runner: &Path,
+        plan: &ExecutionPlan,
+        id: &ExecutionId,
+    ) -> Result<ExecutionPlan, Error> {
+        JsonExecutionPlan::try_from(plan)?;
+        let mut args = vec![
+            "__axvern_worker".into(),
+            self.store.root.as_os_str().into(),
+            id.to_string().into(),
+            self.config.results.retention_seconds.to_string().into(),
+            self.config.results.capacity_bytes.to_string().into(),
+            self.config.results.max_artifact_bytes.to_string().into(),
+            "--".into(),
+            plan.program.clone(),
+        ];
+        args.extend(plan.args.clone());
+        Ok(ExecutionPlan {
+            program: runner.as_os_str().into(),
+            args,
+            cwd: plan.cwd.clone(),
+        })
+    }
+    pub fn run_captured(
+        &mut self,
+        runner: &Path,
+        plan: &ExecutionPlan,
+        interactive: bool,
+        approval: Approval,
+    ) -> Result<ExecutionRecord, crate::store::RegistrationFailure> {
+        let fail = |error| crate::store::RegistrationFailure {
+            error,
+            receipt: None,
+            execution_id: None,
+        };
+        authorize(&self.config, plan, interactive, approval).map_err(fail)?;
+        let id = ExecutionStore::allocate_id().map_err(fail)?;
+        let worker = self.worker_plan(runner, plan, &id).map_err(fail)?;
+        let check_adapter = self.adapter.clone();
+        let registration = self.store.register_intent(
+            &id,
+            plan,
+            || {
+                crate::results::preflight_registration_locked(
+                    &self.store,
+                    &self.config.results,
+                    plan,
+                )?;
+                check_adapter.check()
+            },
+            |id| self.adapter.register_with_label(&worker, id),
+        );
+        match registration {
+            Ok(request) => request
+                .record
+                .ok_or_else(|| crate::store::RegistrationFailure {
+                    error: Error::new(
+                        ErrorCode::RegistrationUnknown,
+                        "registration intent needs reconciliation; do not retry add",
+                    ),
+                    receipt: None,
+                    execution_id: Some(id),
+                }),
+            Err(error) => {
+                let reserved = self.store.intent(&id).ok().flatten().is_some();
+                Err(crate::store::RegistrationFailure {
+                    error,
+                    receipt: self.store.find_record(&id).ok().map(Box::new),
+                    execution_id: reserved.then_some(id),
+                })
+            }
+        }
+    }
+    /// Retain the last actual observation when the wait budget expires.
+    pub fn observe_wait(
+        &self,
+        id: &ExecutionId,
+        timeout: Duration,
+    ) -> Result<(ExecutionView, bool), Error> {
+        let record = self.store.find_record(id)?;
+        let deadline = std::time::Instant::now() + timeout;
+        let mut last = None;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok((
+                    ExecutionView {
+                        record,
+                        task: last,
+                        error: None,
+                    },
+                    true,
+                ));
+            }
+            let mut client = self.adapter.clone();
+            client.timeout = client.timeout.min(remaining);
+            match client.inspect_owned(&record.backend) {
+                Ok(task) => {
+                    let task = self.target_snapshot(task, id)?;
+                    let terminal = matches!(task.state, ChildState::Done | ChildState::Failed);
+                    last = Some(task);
+                    if terminal {
+                        return Ok((
+                            ExecutionView {
+                                record,
+                                task: last,
+                                error: None,
+                            },
+                            false,
+                        ));
+                    }
+                }
+                Err(e) if e.code == ErrorCode::Timeout && std::time::Instant::now() >= deadline => {
+                    return Ok((
+                        ExecutionView {
+                            record,
+                            task: last,
+                            error: None,
+                        },
+                        true,
+                    ));
+                }
+                Err(e) => return Err(e),
+            }
+            std::thread::sleep(
+                Duration::from_millis(250)
+                    .min(deadline.saturating_duration_since(std::time::Instant::now())),
+            );
+        }
+    }
     pub fn new(config: Config) -> Result<Self, Error> {
         let adapter = adapter(&config)?;
         let path = store_path(&config)?;
@@ -161,13 +309,14 @@ impl ExecutionService {
             RegistrationFailure {
                 error,
                 receipt: None,
+                execution_id: None,
             }
         })?;
         register_and_save(&mut self.adapter, &self.store, plan)
     }
     pub fn status(&self, id: &ExecutionId) -> Result<ExecutionView, Error> {
         let record = self.store.find_record(id)?;
-        let task = self.adapter.inspect_owned(&record.backend)?;
+        let task = self.target_snapshot(self.adapter.inspect_owned(&record.backend)?, id)?;
         Ok(ExecutionView {
             record,
             task: Some(task),
@@ -176,7 +325,7 @@ impl ExecutionService {
     }
     pub fn wait(&self, id: &ExecutionId, timeout: Duration) -> Result<ExecutionView, Error> {
         let record = self.store.find_record(id)?;
-        let task = self.adapter.wait(&record.backend, timeout)?;
+        let task = self.target_snapshot(self.adapter.wait(&record.backend, timeout)?, id)?;
         Ok(ExecutionView {
             record,
             task: Some(task),
@@ -199,7 +348,7 @@ impl ExecutionService {
             return Ok(vec![]);
         }
         let tasks = self.adapter.list();
-        Ok(records
+        records
             .into_iter()
             .map(|record| {
                 let result = match &tasks {
@@ -216,18 +365,18 @@ impl ExecutionService {
                     Err(error) => Err(error.clone()),
                 };
                 match result {
-                    Ok(task) => ExecutionView {
+                    Ok(task) => Ok(ExecutionView {
+                        task: Some(self.target_snapshot(task, &record.execution_id)?),
                         record,
-                        task: Some(task),
                         error: None,
-                    },
-                    Err(error) => ExecutionView {
+                    }),
+                    Err(error) => Ok(ExecutionView {
                         record,
                         task: None,
                         error: Some(error),
-                    },
+                    }),
                 }
             })
-            .collect())
+            .collect()
     }
 }

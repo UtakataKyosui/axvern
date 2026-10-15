@@ -135,6 +135,7 @@ pub struct PolicyDecision {
     pub effect: PolicyEffect,
     pub reason: String,
     pub rule_id: Option<String>,
+    pub matching_rule_ids: Vec<String>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Approval {
@@ -145,6 +146,13 @@ pub enum Approval {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
+    StorageFull,
+    InvalidCursor,
+    ResultExpired,
+    ResultEvicted,
+    OutputLimitTooSmall,
+    RequestConflict,
+    UnsupportedCapability,
     RegistrationUnknown,
     StoreFailure,
     Expired,
@@ -193,6 +201,22 @@ pub struct ExecutionView {
     /// Backend lookup failure retains local metadata, including an expired mapping.
     pub error: Option<Error>,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParentRecord {
+    pub execution_id: ExecutionId,
+    pub registered_at: u64,
+    pub cwd: String,
+    pub children: Vec<ExecutionId>,
+}
+/// A parent's exit code is not one arbitrarily selected child's numeric exit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ParentView {
+    pub record: ParentRecord,
+    pub state: Option<TaskState>,
+    pub children: Vec<ExecutionView>,
+    pub error: Option<Error>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckLevel {
@@ -206,6 +230,18 @@ pub struct Diagnostic {
     pub level: CheckLevel,
     pub message: String,
     pub remedy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolDiagnostic>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolDiagnostic {
+    /// Null means that the deadline prevented checking installation.
+    pub installed: Option<bool>,
+    pub version: Option<String>,
+    pub supported_versions: Vec<String>,
+    pub feature_available: bool,
+    pub purpose: String,
+    pub dependencies: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DoctorReport {
@@ -234,6 +270,7 @@ impl std::error::Error for Error {}
 #[derive(Debug, Serialize)]
 pub struct Response<T> {
     pub schema_version: u32,
+    pub command: Option<String>,
     pub execution_id: Option<ExecutionId>,
     pub state: Option<TaskState>,
     pub exit_code: Option<i32>,
@@ -243,7 +280,8 @@ pub struct Response<T> {
 impl<T> Response<T> {
     pub fn success(output: T) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
+            command: None,
             execution_id: None,
             state: None,
             exit_code: None,
@@ -253,7 +291,8 @@ impl<T> Response<T> {
     }
     pub fn failure(error: Error) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
+            command: None,
             execution_id: None,
             state: None,
             exit_code: None,
