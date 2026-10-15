@@ -237,7 +237,13 @@ pub fn diagnose_scope_with_timeout(
         }
     }
     if matches!(scope, "discovery" | "all") {
-        for spec in [&tools::FD, &tools::RG, &tools::BAT] {
+        for spec in [
+            &tools::FD,
+            &tools::RG,
+            &tools::BAT,
+            &tools::AST_GREP,
+            &tools::TOKEI,
+        ] {
             checks.push(adapter_tool(spec, deadline));
         }
         checks.push(future_tool(
@@ -246,12 +252,6 @@ pub fn diagnose_scope_with_timeout(
             false,
             deadline,
         ));
-        for (tool, purpose) in [
-            ("ast-grep", "structural code search"),
-            ("tokei", "language statistics"),
-        ] {
-            checks.push(future_tool(tool, purpose, true, deadline));
-        }
     }
     if matches!(scope, "performance" | "all") {
         checks.push(future_tool(

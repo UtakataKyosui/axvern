@@ -16,6 +16,8 @@ pub const CONTEXT_LINE_BYTES: usize = 512;
 pub const READ_BODY_BYTES: u64 = 1024 * 1024;
 /// Bounds on the issue lists stored with a result, so that every page carries them.
 pub const MAX_ISSUES: usize = 50;
+/// Largest stored text of one `code search` match.
+pub const SNIPPET_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscoveryLimits {
@@ -80,6 +82,16 @@ pub enum DiscoveryRequest {
         from_line: u64,
         lines: u32,
     },
+    CodeSearch {
+        pattern: String,
+        lang: String,
+        path: Option<PathBuf>,
+        include_ignored: bool,
+    },
+    CodeStats {
+        path: Option<PathBuf>,
+        include_ignored: bool,
+    },
 }
 
 /// `root` is a resolved absolute UTF-8 directory. `in_repo` records whether a Git
@@ -127,6 +139,26 @@ pub struct ReadJob {
     pub lines: u32,
     pub limits: DiscoveryLimits,
 }
+/// `lang` is a name from the adapter's language table. `file` is the basename inside `root`
+/// when the searched path is a single file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeSearchJob {
+    pub root: String,
+    pub file: Option<String>,
+    pub in_repo: bool,
+    pub pattern: String,
+    pub lang: String,
+    pub include_ignored: bool,
+    pub limits: DiscoveryLimits,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeStatsJob {
+    pub root: String,
+    pub file: Option<String>,
+    pub in_repo: bool,
+    pub include_ignored: bool,
+    pub limits: DiscoveryLimits,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum DiscoveryJob {
@@ -134,6 +166,8 @@ pub enum DiscoveryJob {
     Find(FindJob),
     Search(SearchJob),
     Read(ReadJob),
+    CodeSearch(CodeSearchJob),
+    CodeStats(CodeStatsJob),
 }
 impl DiscoveryJob {
     /// Public command name, as reported in the response envelope.
@@ -143,6 +177,8 @@ impl DiscoveryJob {
             Self::Find(_) => "fs find",
             Self::Search(_) => "fs search",
             Self::Read(_) => "fs read",
+            Self::CodeSearch(_) => "code search",
+            Self::CodeStats(_) => "code stats",
         }
     }
     /// Result kind, as reported in the stored result.
@@ -152,6 +188,8 @@ impl DiscoveryJob {
             Self::Find(_) => "fs.find",
             Self::Search(_) => "fs.search",
             Self::Read(_) => "fs.read",
+            Self::CodeSearch(_) => "code.search",
+            Self::CodeStats(_) => "code.stats",
         }
     }
     pub fn limits(&self) -> &DiscoveryLimits {
@@ -160,6 +198,8 @@ impl DiscoveryJob {
             Self::Find(j) => &j.limits,
             Self::Search(j) => &j.limits,
             Self::Read(j) => &j.limits,
+            Self::CodeSearch(j) => &j.limits,
+            Self::CodeStats(j) => &j.limits,
         }
     }
 }
@@ -197,12 +237,50 @@ pub struct LineItem {
     pub text: String,
     pub line_truncated: bool,
 }
+/// 1-based line and 1-based UTF-8 byte column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct CodePosition {
+    pub line: u64,
+    pub byte_column: u64,
+}
+/// `end` is exclusive.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeMatchItem {
+    pub path: String,
+    pub lang: String,
+    pub start: CodePosition,
+    pub end: CodePosition,
+    pub snippet: String,
+    pub snippet_truncated: bool,
+}
+/// Counts of one language embedded in a host language (for example JavaScript in HTML).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddedStat {
+    pub language: String,
+    pub files: u64,
+    pub code: u64,
+    pub comments: u64,
+    pub blanks: u64,
+}
+/// Lines of the files whose own language is `language`; embedded lines are listed separately.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanguageStatItem {
+    pub language: String,
+    pub files: u64,
+    pub code: u64,
+    pub comments: u64,
+    pub blanks: u64,
+    pub embedded: Vec<EmbeddedStat>,
+}
+/// Variants are told apart by their required fields, so the order does not matter.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DiscoveryItem {
     Match(MatchItem),
     Line(LineItem),
     Entry(EntryItem),
+    Code(CodeMatchItem),
+    Stat(LanguageStatItem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,6 +308,21 @@ pub enum DiscoverySummary {
         root: String,
         depth: u32,
         include_ignored: bool,
+    },
+    CodeSearch {
+        root: String,
+        lang: String,
+        pattern: String,
+    },
+    CodeStats {
+        root: String,
+        files: u64,
+        code: u64,
+        comments: u64,
+        blanks: u64,
+        scope_complete: bool,
+        /// Null: tokei does not report the files it ignored (unknown language, binary).
+        skipped_files: Option<u64>,
     },
 }
 
@@ -294,6 +387,8 @@ pub enum WarningCode {
     SourceChanged,
     EntryVanished,
     BinaryFilesSkipped,
+    /// The tool cannot apply ignore files outside a Git worktree.
+    IgnoreRulesNotApplied,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResultWarning {
