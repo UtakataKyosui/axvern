@@ -180,8 +180,8 @@ Rustは `rust-toolchain.toml` の **1.98.0** に固定し、workspaceのMSRVも1
 | `qualities` | workspace品質タスクの設定 |
 | `sites/axvern-document-site` | 公開ドキュメントプロジェクト |
 
-Cargoがpackageと依存、Moonが横断実行を管理します。Moon **2.6.2**、Node **24**、pnpm **12** を検証済みです。
-Moonはsystem toolchainを使い、Rust/Nodeを自動更新しません。Moonが未導入なら `pnpm dlx @moonrepo/cli@2.6.2` を `moon` の代わりに使えます。
+Cargoがpackageと依存、Moonが横断実行を管理します。Moon **2.5.6**、Node **24.22.0**、pnpm **12.11.2** を検証済みです。
+Moonはsystem toolchainを使い、Rust/Nodeを自動更新しません。Moonが未導入なら `pnpm dlx @moonrepo/cli@2.5.6` を `moon` の代わりに使えます。
 
 ```bash
 # サイトの既存lockfileから依存を復元
@@ -195,7 +195,40 @@ moon run site:check site:build
 cargo tree --locked -e features
 ```
 
-Moonのcheckはファイルを書き換えません。公開コマンドの機能実装・Pueue Spike・CIは後続Issueの対象です。
+Moonのcheckはファイルを書き換えません。`qualities:test` はbuild依存で公開binaryを生成し、
+`AXVERN_TEST_BIN` で別packageのCLI試験へ渡します。直接 `cargo test` を実行する場合も、先に
+`cargo build --workspace --locked` を実行して同変数へbinaryの絶対パスを指定してください。
+
+Pueue **4.0.4** の隔離Spikeは `moon run qualities:pueue-spike`（Python 3.9以上）。
+`devbox run test` でも固定版Moon/Pueueを使って品質ゲートとSpikeを実行できます。
+DevboxはRust/Node/pnpm/Pythonを同梱しないため上記バージョンを別途用意してください。
+[CI](.github/workflows/quality.yml) はLinux/macOSの同一タスクを実行します。
+macOSの実測と後続Adapterへの制約は[fixture記録](logics/tests/fixtures/pueue/README.md)を参照してください。
+Linux実行結果は未取得です。
+
+実装済みの判定コマンド（ターゲットの実行やPueue接続はしません）:
+
+```bash
+cargo run -p axvern-cli -- policy check --format json -- git status
+```
+
+設定は `--config PATH` > `AXVERN_CONFIG` > OSユーザー設定の `config.toml`。
+不在時の既定はAskで、明示ファイルの不在・不正設定はエラーです。Unixの設定ファイルは0600にしてください。
+
+```toml
+schema_version = 1
+[policy]
+default = "ask"
+[[policy.rules]]
+id = "git-status"
+effect = "allow"
+command = "git"
+args_prefix = ["status"]
+```
+
+判定に成功すればAllow/Ask/Denyすべて終了0。実行承認ではありません。
+不正入力は2、設定エラーは3、設定の権限問題は4を返します。
+実行用Adapter、run/status等のコマンドは後続Issueの対象です。
 承認済みの設計判断と検証報告はIssue #5〜#7に反映済みです。[.github/issue-updates](.github/issue-updates/) は反映内容の控えで、正本はGitHub Issueです。
 
 ## Development status

@@ -5,3 +5,4 @@
 /target/
 **/node_modules/
 sites/axvern-document-site/doc_build/
+**/__pycache__/
