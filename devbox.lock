@@ -2,10 +2,10 @@
   "lockfile_version": "1",
   "packages": {
     "github:NixOS/nixpkgs/nixpkgs-unstable": {
-      "last_modified": "2026-10-08T19:21:32Z",
-      "resolved": "github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30?lastModified=1791487292&narHash=sha256-tqM7xDEsaeK1p6VvRygeZ9LkQRpUUkbRT02BHv6hnTM%3D"
+      "last_modified": "2026-10-10T12:58:50Z",
+      "resolved": "github:NixOS/nixpkgs/ca1659429c950a11a565b5764e37a1b704e17ec8?lastModified=1791637130&narHash=sha256-TuvwvSjJrpqyIYdjhQ7Wu%2BADVfeOpO2Um21%2FV7TOubw%3D"
     },
-    "moon@latest": {
+    "moon@2.5.6": {
       "last_modified": "2026-10-08T19:21:32Z",
       "resolved": "github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30#moon",
       "source": "devbox-search",
@@ -40,6 +40,54 @@
             }
           ],
           "store_path": "/nix/store/kc7xijmq3asr8r69ppvbbwrmyl3wrbk0-moon-2.5.6"
+        }
+      }
+    },
+    "pueue@4.0.4": {
+      "last_modified": "2026-10-08T19:21:32Z",
+      "resolved": "github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30#pueue",
+      "source": "devbox-search",
+      "version": "4.0.4",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/3nzjqayalx576gwpg2hbcx2k7wbflnkm-pueue-4.0.4",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/3nzjqayalx576gwpg2hbcx2k7wbflnkm-pueue-4.0.4"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/x1ykqbhzyc45k8dh3i6znj7z4hd9ibg5-pueue-4.0.4",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/x1ykqbhzyc45k8dh3i6znj7z4hd9ibg5-pueue-4.0.4"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/x2n48hyzw135if0434anb16689ggc4xj-pueue-4.0.4",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/x2n48hyzw135if0434anb16689ggc4xj-pueue-4.0.4"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/mhcn73813mpzqy9wmhvxxgnji5g4if47-pueue-4.0.4",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/mhcn73813mpzqy9wmhvxxgnji5g4if47-pueue-4.0.4"
         }
       }
     }

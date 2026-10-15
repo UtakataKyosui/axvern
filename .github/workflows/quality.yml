@@ -1,0 +1,106 @@
+name: Quality
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.plan.outputs.rust }}
+      site: ${{ steps.plan.outputs.site }}
+      links: ${{ steps.plan.outputs.links }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        run: |
+          python3 qualities/scripts/test_ci_plan.py
+          python3 qualities/scripts/ci_plan.py
+  verify:
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Moon resolves the configured default branch even for explicit task runs.
+      - run: git show-ref --verify --quiet refs/heads/main || git branch main origin/main
+      - uses: actions/setup-node@v4
+        if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.site == 'true'
+        with:
+          node-version: 24.22.0
+      - if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.site == 'true'
+        run: npm install --global @moonrepo/cli@2.5.6 pnpm@12.11.2
+      - if: needs.changes.outputs.rust == 'true'
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+      - uses: actions/cache@v4
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml', 'Cargo.lock') }}-${{ github.sha }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml', 'Cargo.lock') }}-
+      - uses: actions/cache@v4
+        id: pueue
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          path: ${{ runner.temp }}/pueue
+          key: pueue-v1-${{ runner.os }}-${{ runner.arch }}-4.0.4-rust-1.98.0
+      - if: needs.changes.outputs.rust == 'true' && steps.pueue.outputs.cache-hit != 'true'
+        run: cargo install pueue --version 4.0.4 --locked --root "$RUNNER_TEMP/pueue"
+      - if: needs.changes.outputs.rust == 'true'
+        run: echo "$RUNNER_TEMP/pueue/bin" >> "$GITHUB_PATH"
+      - id: pnpm
+        if: needs.changes.outputs.site == 'true'
+        run: echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        if: needs.changes.outputs.site == 'true'
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sites/axvern-document-site/pnpm-lock.yaml') }}
+      - if: needs.changes.outputs.site == 'true'
+        run: pnpm install --frozen-lockfile
+        working-directory: sites/axvern-document-site
+      - name: Check affected groups (always execute tests, never cache results)
+        shell: bash
+        env:
+          CHECK_RUST: ${{ needs.changes.outputs.rust }}
+          CHECK_SITE: ${{ needs.changes.outputs.site }}
+          CHECK_LINKS: ${{ needs.changes.outputs.links }}
+        run: |
+          mkdir -p target
+          set -o pipefail
+          tasks=()
+          if [[ "$CHECK_RUST" == true ]]; then
+            tasks+=(qualities:fmt qualities:check qualities:clippy qualities:test qualities:build qualities:pueue-spike)
+            if [[ -f qualities/scripts/release_smoke.py ]]; then tasks+=(qualities:release-smoke); fi
+          fi
+          if [[ "$CHECK_SITE" == true ]]; then tasks+=(site:check site:build); fi
+          if (( ${#tasks[@]} )); then moon run "${tasks[@]}" 2>&1 | tee target/quality.log; fi
+          if [[ "$CHECK_LINKS" == true && -f qualities/scripts/check_links.py ]]; then
+            python3 qualities/scripts/check_links.py 2>&1 | tee -a target/quality.log
+          fi
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-${{ matrix.os }}
+          path: |
+            target/pueue-spike.json
+            target/release-evidence.json
+            target/quality.log
+          if-no-files-found: ignore

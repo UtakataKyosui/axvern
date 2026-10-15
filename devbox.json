@@ -1,13 +1,13 @@
 {
   "$schema":  "https://raw.githubusercontent.com/jetify-com/devbox/0.18.4/.schema/devbox.schema.json",
-  "packages": ["moon@latest"],
+  "packages": ["moon@2.5.6", "pueue@4.0.4"],
   "shell": {
     "init_hook": [
       "echo 'Welcome to devbox!' > /dev/null"
     ],
     "scripts": {
       "test": [
-        "echo \"Error: no test specified\" && exit 1"
+        "moon run qualities:verify qualities:pueue-spike"
       ]
     }
   }
