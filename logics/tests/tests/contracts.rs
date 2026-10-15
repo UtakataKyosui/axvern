@@ -42,7 +42,17 @@ fn precedence_prefix_and_exact_command() {
 }
 #[test]
 fn shells_require_explicit_rule_even_with_combined_flags() {
-    for shell in ["sh", "/bin/bash", "zsh", "dash", "pwsh"] {
+    for shell in [
+        "sh",
+        "/bin/bash",
+        "zsh",
+        "dash",
+        "pwsh",
+        "cmd.exe",
+        "PowerShell.EXE",
+        "C:\\Windows\\System32\\CMD.EXE",
+        "/mnt/c/Windows/pwsh.exe",
+    ] {
         let c = config(&format!(
             "[[policy.rules]]\nid='broad'\neffect='allow'\ncommand='{shell}'"
         ));
@@ -52,6 +62,15 @@ fn shells_require_explicit_rule_even_with_combined_flags() {
                 PolicyEffect::Deny
             );
         }
+        let explicit = config(&format!(
+            "[[policy.rules]]\nid='explicit'\neffect='allow'\ncommand='{shell}'\nargs_prefix=['-c']\nallow_shell=true"
+        ));
+        assert_eq!(
+            policy::evaluate(&explicit, &plan(shell, &["-c", "true"]))
+                .unwrap()
+                .effect,
+            PolicyEffect::Allow
+        );
     }
     let c = config(
         "[[policy.rules]]\nid='explicit'\neffect='allow'\ncommand='/bin/sh'\nargs_prefix=['-c','true']\nallow_shell=true",
