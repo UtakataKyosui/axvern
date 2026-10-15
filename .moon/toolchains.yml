@@ -1,12 +1,3 @@
-javascript:
-  packageManager: "pnpm"
-  node: 
-    version: "latest"
-  pnpm: 
-    version: "latest"
-    installArgs: ["pnpm", "install"]
-
-rust: 
-  binstallVersion: "latest"
-  target: ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin"]
-  version: "latest"
+# Tool versions: rust-toolchain.toml and the developer environment.
+# Cargo/pnpm own dependency resolution; Moon orchestrates system commands.
+{}

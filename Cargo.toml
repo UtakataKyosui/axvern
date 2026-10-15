@@ -1,3 +1,19 @@
 [workspace]
 resolver = "3"
-members = ["logics/core","tools/cli"]
+members = ["logics/models", "logics/core", "logics/tests", "tools/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+
+[workspace.dependencies]
+axvern-models = { path = "logics/models" }
+axvern-core = { path = "logics/core" }
+clap = { version = "=4.6.7", default-features = false, features = ["std"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

@@ -1,0 +1,10 @@
+language: typescript
+toolchains:
+  default: system
+taskOptions:
+  cache: false
+tasks:
+  check:
+    command: pnpm exec biome check .
+  build:
+    command: pnpm run build

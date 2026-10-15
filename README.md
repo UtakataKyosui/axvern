@@ -63,7 +63,7 @@ axvern recall <execution-id>
 
 ```bash
 axvern fs list ./src
-axvern fs find '*.rs' ./src
+axvern fs find --glob '*.rs' ./src
 axvern fs search 'TODO' ./src
 axvern fs read ./src/main.rs --from-line 1 --lines 80  # v0.2
 axvern code search --pattern 'fn $NAME($$$ARGS) { $$$BODY }' ./src  # v0.2
@@ -165,6 +165,38 @@ flowchart LR
 - [クレート選定の提案](https://github.com/UtakataKyosui/axvern/issues/7)
 
 `sites`は実装・検証済み機能の公開ドキュメントを作成するプロジェクトです。
+
+## Workspace development
+
+Rustは `rust-toolchain.toml` の **1.98.0** に固定し、workspaceのMSRVも1.98とします。
+更新はtoolchainとMSRVを同時に変更し、workspace全体を検証します。
+
+| 配置 | package / 責務 |
+| --- | --- |
+| `logics/models` | `axvern-models`: 共有型・Trait。runtime・CLI・具体的I/Oに依存しない |
+| `logics/core` | `axvern-core`: ユースケース・Policy・Adapter。modelsに依存 |
+| `logics/tests` | `axvern-tests`: 非公開のロジック・契約・統合テスト。core/modelsを検証 |
+| `tools/cli` | `axvern-cli`: 引数・配線・表示・終了コード。公開binary名は `axvern` |
+| `qualities` | workspace品質タスクの設定 |
+| `sites/axvern-document-site` | 公開ドキュメントプロジェクト |
+
+Cargoがpackageと依存、Moonが横断実行を管理します。Moon **2.6.2**、Node **24**、pnpm **12** を検証済みです。
+Moonはsystem toolchainを使い、Rust/Nodeを自動更新しません。Moonが未導入なら `pnpm dlx @moonrepo/cli@2.6.2` を `moon` の代わりに使えます。
+
+```bash
+# サイトの既存lockfileから依存を復元
+pnpm --dir sites/axvern-document-site install --frozen-lockfile
+moon projects
+moon run qualities:verify
+
+# 個別実行
+moon run qualities:fmt qualities:clippy qualities:test qualities:build
+moon run site:check site:build
+cargo tree --locked -e features
+```
+
+Moonのcheckはファイルを書き換えません。公開コマンドの機能実装・Pueue Spike・CIは後続Issueの対象です。
+承認済みの設計判断と検証報告はIssue #5〜#7に反映済みです。[.github/issue-updates](.github/issue-updates/) は反映内容の控えで、正本はGitHub Issueです。
 
 ## Development status
 
