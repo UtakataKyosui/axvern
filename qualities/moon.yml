@@ -11,9 +11,12 @@ tasks:
   clippy:
     command: cargo clippy --workspace --all-targets --locked -- -D warnings
   test:
-    command: cargo test --workspace --locked
+    command: python3 qualities/scripts/test.py
+    deps: [qualities:build]
   build:
     command: cargo build --workspace --locked
+  pueue-spike:
+    command: python3 qualities/scripts/pueue_spike.py --record target/pueue-spike.json
   verify:
     command: noop
     deps: [qualities:fmt, qualities:check, qualities:clippy, qualities:test, qualities:build, site:check, site:build]

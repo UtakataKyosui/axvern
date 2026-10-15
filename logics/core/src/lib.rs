@@ -1,2 +1,3 @@
-//! Use cases and concrete adapters implementing axvern-models contracts.
-//! Execution, policy, and persistence are implemented in subsequent tasks.
+//! Core use cases and concrete I/O boundaries.
+pub mod config;
+pub mod policy;

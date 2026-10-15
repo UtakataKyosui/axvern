@@ -1,0 +1,107 @@
+{
+  "pueue_version": "4.0.4",
+  "platform": "darwin",
+  "checks": {
+    "argv": {
+      "cases": [
+        "",
+        "a b",
+        "single'quote",
+        "double\"quote",
+        "line\nbreak",
+        "$(touch INJECTED)",
+        "`touch INJECTED`",
+        "; touch INJECTED",
+        "*?[a]",
+        "\\",
+        "日本語🦀",
+        "--config",
+        "-n"
+      ],
+      "exact_roundtrip": true
+    },
+    "merged_stream": "out-0\nerr-0\nout-1\nerr-1\nout-2\nerr-2\n",
+    "child_failure": {
+      "wait_cli_exit": 0,
+      "status": {
+        "Done": {
+          "enqueued_at": "2026-10-15T09:57:23.267058+09:00",
+          "start": "2026-10-15T09:57:23.343127+09:00",
+          "end": "2026-10-15T09:57:23.645273+09:00",
+          "result": {
+            "Failed": 23
+          }
+        }
+      }
+    },
+    "timeout": {
+      "client_timeout_task_continues": true,
+      "running_log": "started\n"
+    },
+    "killed": {
+      "Done": {
+        "enqueued_at": "2026-10-15T09:57:29.632423+09:00",
+        "start": "2026-10-15T09:57:29.687847+09:00",
+        "end": "2026-10-15T09:57:29.990919+09:00",
+        "result": "Killed"
+      }
+    },
+    "large_log": {
+      "full_bytes": 2140000,
+      "tail_bytes": 534,
+      "full_seconds": 0.0217,
+      "tail_lines": 5
+    },
+    "restart": {
+      "completed_tasks_preserved": true,
+      "daemon_unavailable_cli_nonzero": true
+    },
+    "clean": {
+      "log_cli_exit": 0,
+      "log_stdout": "{}\n"
+    },
+    "ids": {
+      "after_clean": 0,
+      "after_reset": 0,
+      "id_reused_after_reset": true
+    },
+    "daemon_crash": {
+      "daemon_exit": -9,
+      "offline_cli_exit": 1,
+      "restored_status": {
+        "Done": {
+          "enqueued_at": "2026-10-15T09:57:38.419003+09:00",
+          "start": "2026-10-15T09:57:38.497393+09:00",
+          "end": "2026-10-15T09:57:39.228021+09:00",
+          "result": "Killed"
+        }
+      }
+    },
+    "parallel_isolation_cleanup": true
+  },
+  "status_task_keys": [
+    "command",
+    "created_at",
+    "dependencies",
+    "envs",
+    "group",
+    "id",
+    "label",
+    "original_command",
+    "path",
+    "priority",
+    "status"
+  ],
+  "success_status": {
+    "Done": {
+      "enqueued_at": "2026-10-15T09:57:19.181494+09:00",
+      "start": "2026-10-15T09:57:19.408399+09:00",
+      "end": "2026-10-15T09:57:19.711636+09:00",
+      "result": "Success"
+    }
+  },
+  "log_entry_keys": [
+    "output",
+    "task"
+  ]
+}
