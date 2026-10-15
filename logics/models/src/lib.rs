@@ -145,6 +145,9 @@ pub enum Approval {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
+    RegistrationUnknown,
+    StoreFailure,
+    Expired,
     InvalidInput,
     InvalidEncoding,
     InvalidConfig,
@@ -157,6 +160,31 @@ pub enum ErrorCode {
     PartialResult,
     Timeout,
     BackendFailure,
+}
+
+/// Backend identity includes queue identity and creation time: integer IDs are recycled.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendIdentity {
+    pub queue: String,
+    pub task_id: u64,
+    pub created_at: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskSnapshot {
+    pub identity: BackendIdentity,
+    pub state: ChildState,
+    pub exit_code: Option<i32>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionRecord {
+    pub execution_id: ExecutionId,
+    pub backend: BackendIdentity,
+    pub registered_at: u64,
+    pub cwd: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Error {
