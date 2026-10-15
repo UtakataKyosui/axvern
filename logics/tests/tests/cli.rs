@@ -257,6 +257,30 @@ fn doctor_tool_and_store_failures_are_structured() {
         "warning"
     );
     assert!(!checks.iter().any(|c| c["name"] == "project_pnpm"));
+    // The first status snapshot is owned, but log retrieval races with ID reuse.
+    let execution_store = axvern_core::store::ExecutionStore::open(&store).unwrap();
+    let record = axvern_models::ExecutionRecord {
+        execution_id: axvern_core::store::ExecutionStore::allocate_id().unwrap(),
+        backend: axvern_models::BackendIdentity {
+            queue: backend.canonicalize().unwrap().to_str().unwrap().into(),
+            task_id: 0,
+            created_at: "original".into(),
+        },
+        registered_at: 1,
+        cwd: root.to_str().unwrap().into(),
+    };
+    execution_store.save_record(&record).unwrap();
+    for (created, expected) in [("replacement", "warning"), ("original", "pass")] {
+        std::fs::write(&tool, format!(
+            "#!/bin/sh\ncase \"$*\" in\n*--version*) printf 'pueue 4.0.4\\n';;\n*status*) printf '%s\\n' '{{\"tasks\":{{\"0\":{{\"id\":0,\"created_at\":\"original\",\"status\":{{\"Queued\":{{}}}}}}}}}}';;\n*log*) printf '%s\\n' '{{\"0\":{{\"task\":{{\"id\":0,\"created_at\":\"{created}\"}},\"output\":\"private log\"}}}}';;\nesac\n"
+        )).unwrap();
+        let (code, checks) = diagnose();
+        assert_eq!(code, 0);
+        assert_eq!(
+            checks.iter().find(|c| c["name"] == "pueue_logs").unwrap()["level"],
+            expected
+        );
+    }
     std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o755)).unwrap();
     let (code, checks) = diagnose();
     assert_eq!(code, 12);

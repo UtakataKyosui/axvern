@@ -41,7 +41,7 @@ pub fn diagnose(config: Result<Config, Error>, cwd: &Path) -> DoctorReport {
                 Err(error),
                 "set execution.pueue_config to the absolute existing Pueue configuration path",
             )),
-            Ok(mut adapter) => {
+            Ok(adapter) => {
                 checks.push(check(
                     "pueue_version",
                     adapter.version(),
@@ -59,7 +59,7 @@ pub fn diagnose(config: Result<Config, Error>, cwd: &Path) -> DoctorReport {
                             .is_ok_and(|ts| ts.iter().any(|t| t.identity == r.backend))
                     })
                 });
-                let log = candidate.map(|r| adapter.output(r.backend.task_id, 65536));
+                let log = candidate.map(|r| adapter.output_owned(&r.backend, 65536));
                 checks.push(match log {
                     Some(Ok(_)) => Diagnostic { name: "pueue_logs".into(), level: CheckLevel::Pass, message: "owned task log is readable".into(), remedy: None },
                     Some(Err(e)) if e.code == ErrorCode::PartialResult => Diagnostic { name: "pueue_logs".into(), level: CheckLevel::Pass, message: "owned task log is readable (bounded probe)".into(), remedy: None },
