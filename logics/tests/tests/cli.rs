@@ -298,6 +298,57 @@ fn doctor_tool_and_store_failures_are_structured() {
         "fail"
     );
     std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // Future-integration scopes report each tool with its own typed capability data.
+    std::fs::write(bin.join("rg"), "#!/bin/sh\nprintf 'ripgrep 14.1.0\\n'\n").unwrap();
+    std::fs::set_permissions(bin.join("rg"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let scoped = |scope: &str| {
+        let out = Command::new(&binary)
+            .current_dir(root)
+            .env("PATH", &bin)
+            .env_remove("AXVERN_CONFIG")
+            .arg("--config")
+            .arg(&config)
+            .args(["doctor", "--scope", scope, "--format", "json"])
+            .output()
+            .unwrap();
+        assert!(out.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        (
+            out.status.code().unwrap(),
+            value["output"]["checks"].as_array().unwrap().clone(),
+        )
+    };
+    let find = |checks: &[serde_json::Value], name: &str| {
+        checks.iter().find(|c| c["name"] == name).cloned()
+    };
+    let (code, checks) = scoped("discovery");
+    assert_eq!(code, 12);
+    let missing = find(&checks, "eza").unwrap();
+    assert_eq!(missing["level"], "fail");
+    assert_eq!(missing["tool"]["installed"], false);
+    assert_eq!(missing["tool"]["feature_available"], false);
+    assert_eq!(missing["tool"]["supported_versions"], serde_json::json!([]));
+    let installed = find(&checks, "rg").unwrap();
+    assert_eq!(installed["level"], "fail");
+    assert_eq!(installed["tool"]["installed"], true);
+    assert_eq!(installed["tool"]["version"], "14.1.0");
+    assert_eq!(installed["tool"]["feature_available"], false);
+    assert!(
+        installed["message"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported tool capability")
+    );
+    assert!(find(&checks, "hyperfine").is_none());
+    let (_, checks) = scoped("performance");
+    assert_eq!(find(&checks, "hyperfine").unwrap()["level"], "fail");
+    assert!(find(&checks, "eza").is_none());
+    let (_, checks) = scoped("all");
+    assert_eq!(find(&checks, "delta").unwrap()["level"], "warning");
+    assert!(find(&checks, "samply").is_some());
+    let (code, checks) = scoped("core");
+    assert_eq!(code, 0);
+    assert!(find(&checks, "eza").is_none());
 }
 
 #[test]
@@ -339,5 +390,27 @@ fn schema_two_options_policy_cwd_matching_rules_and_invalid_boundaries() {
         let result = cli(&args, Some(&config));
         assert_eq!(result.status.code(), Some(2));
         assert!(result.stderr.is_empty());
+    }
+}
+
+#[test]
+fn result_max_bytes_accepts_only_plain_digits_within_the_wire_budget() {
+    let (_dir, config) = private_config("schema_version=1");
+    let id = "ex_550e8400-e29b-41d4-a716-446655440000";
+    let code_for = |value: &str| {
+        let out = cli(&["result", id, "--max-bytes", value], Some(&config));
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        value["error"]["code"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    for rejected in [
+        "", "+1024", "1024x", "0x400", " 1024", "1023", "65537", "-1024",
+    ] {
+        assert_eq!(code_for(rejected), "invalid_input", "{rejected:?}");
+    }
+    for accepted in ["1024", "65536"] {
+        assert_ne!(code_for(accepted), "invalid_input", "{accepted:?}");
     }
 }

@@ -433,3 +433,42 @@ fn doctor_deadline_bounds_waiting_for_another_clients_store_lock() {
     assert!(store_check.message.contains("Timeout"), "{store_check:?}");
     drop(held);
 }
+
+#[test]
+fn malformed_cursors_are_rejected_even_when_parsable() {
+    let (temp, store) = store();
+    let root = temp.path().canonicalize().unwrap().join("executions");
+    let id = ExecutionStore::allocate_id().unwrap();
+    assert!(worker(&root, &id, "print('x' * 4000)", 250000).success());
+    let settings = Results {
+        retention_seconds: 3600,
+        capacity_bytes: 1048576,
+        max_artifact_bytes: 250000,
+    };
+    let encode = |text: &str| -> String { text.bytes().map(|b| format!("{b:02x}")).collect() };
+    let mut tokens = vec![
+        String::new(),
+        "abc".into(),
+        "zz".into(),
+        "00".repeat(65),
+        encode("no-separators"),
+    ];
+    for (position, fragment) in [
+        ("+5", "1"),
+        ("05", "1"),
+        ("5", "+1"),
+        ("0", "1"),
+        ("5", "0"),
+        ("3", "9"),
+        ("-1", "0"),
+    ] {
+        tokens.push(encode(&format!("{id}:{position}:{fragment}")));
+    }
+    for token in &tokens {
+        let error = results::page(&store, &settings, &id, Some(token), 2, 1024).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidCursor, "token {token}");
+    }
+    // A canonical cursor of the same shape is accepted.
+    let valid = encode(&format!("{id}:1:1"));
+    assert!(results::page(&store, &settings, &id, Some(&valid), 2, 1024).is_ok());
+}

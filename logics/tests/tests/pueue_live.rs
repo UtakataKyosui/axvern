@@ -619,3 +619,58 @@ fn schema_two_keyed_run_replays_after_policy_change_and_backend_log_deletion() {
     );
     assert_eq!(conflict["error"]["code"], "request_conflict");
 }
+
+#[test]
+fn concurrent_service_runs_without_request_id_register_one_task_within_capacity() {
+    use axvern_core::{config::Config, results, services::ExecutionService};
+    let q = Queue::new();
+    let store = q._temp.path().join("store");
+    let config = Config::parse(&format!(
+        "schema_version=1\n[execution]\npueue_config={}\nstore={}\n[[policy.rules]]\nid='python'\ncommand='python3'\neffect='allow'\n",
+        serde_json::to_string(&q.adapter.config).unwrap(),
+        serde_json::to_string(&store).unwrap()
+    ))
+    .unwrap();
+    let plan = q.plan("print('once')", &[]);
+    // Smallest capacity at which exactly one registration's metadata still fits.
+    let probe = ExecutionService::new(config.clone()).unwrap();
+    let (mut low, mut high) = (0, 1u64 << 24);
+    while low + 1 < high {
+        let mid = low + (high - low) / 2;
+        let mut settings = config.results.clone();
+        settings.capacity_bytes = mid;
+        if results::preflight_registration_locked(&probe.store, &settings, &plan).is_ok() {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    // The valid minimum capacity is fixed; existing stored data leaves exactly one registration of room.
+    let filler = store.join("filler.pad");
+    fs::write(
+        &filler,
+        vec![0; (config.results.capacity_bytes - high) as usize],
+    )
+    .unwrap();
+    fs::set_permissions(&filler, fs::Permissions::from_mode(0o600)).unwrap();
+    let runner = std::path::PathBuf::from(std::env::var_os("AXVERN_TEST_BIN").unwrap());
+    let threads: Vec<_> = (0..6)
+        .map(|_| {
+            let (config, runner, plan) = (config.clone(), runner.clone(), plan.clone());
+            thread::spawn(move || {
+                ExecutionService::new(config).unwrap().run_captured(
+                    &runner,
+                    &plan,
+                    false,
+                    Approval::NotProvided,
+                )
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(outcomes.iter().filter(|r| r.is_ok()).count(), 1);
+    for refused in outcomes.iter().filter_map(|r| r.as_ref().err()) {
+        assert_eq!(refused.error.code, ErrorCode::StorageFull);
+    }
+    assert_eq!(q.adapter.list().unwrap().len(), 1);
+}

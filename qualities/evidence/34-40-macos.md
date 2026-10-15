@@ -14,8 +14,8 @@ Date: 2026-10-15. Platform: macOS arm64. Rust 1.98.0, Pueue 4.0.4, Node 24.22.0.
 
 ## Verification
 
-- Rust: 41 tests passed in the final workspace suite, including four real isolated Pueue tests.
-- Regression tests cover capacity shared by concurrent registrations without a request ID (exactly one of eight succeeds, the rest are refused with `storage_full`), `--wait 0s` re-reference of a completed keyed run (saved result and `available`, never `pending`), and `doctor` returning within its deadline while another client holds the store lock.
+- Rust: 44 tests passed in the final workspace suite, including five real isolated Pueue tests.
+- Audit regression tests, each checked to fail when its production fix is reverted: capacity shared by concurrent runs without a request ID (through `ExecutionService::run_captured`, exactly one Pueue task is registered and the rest are refused with `storage_full`), `--wait 0s` re-reference of a completed keyed run (saved result and `available`, never `pending`), `doctor` returning within its deadline while another client holds the store lock, `doctor` tool capability data and `discovery`/`performance`/`all` scopes, non-canonical cursor rejection, and `--max-bytes` plain-digit and range validation. Failure to save a result after the target exits is not independently covered.
 - New tests exercise concurrent identical request IDs, differing-input conflict, interrupted-process durable intent, no resubmission, configuration limits, Unicode/control-character page reconstruction at an exact 1024-byte JSON budget, replayed pages, foreign cursor rejection, expiry tombstones, capacity eviction, active spool protection, and parent state aggregation.
 - Pueue integration verifies immediate return, explicit wait timeout followed by completion, argv/cwd fidelity, target exit 23, result retrieval after backend cleanup, policy-change replay, and parent status/wait/history partial state.
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `git diff --check` pass.
