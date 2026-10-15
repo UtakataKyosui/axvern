@@ -1,0 +1,19 @@
+toolchains:
+  default: system
+taskOptions:
+  cache: false
+  runFromWorkspaceRoot: true
+tasks:
+  fmt:
+    command: cargo fmt --all --check
+  check:
+    command: cargo check --workspace --all-targets --locked
+  clippy:
+    command: cargo clippy --workspace --all-targets --locked -- -D warnings
+  test:
+    command: cargo test --workspace --locked
+  build:
+    command: cargo build --workspace --locked
+  verify:
+    command: noop
+    deps: [qualities:fmt, qualities:check, qualities:clippy, qualities:test, qualities:build, site:check, site:build]

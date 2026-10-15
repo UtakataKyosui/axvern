@@ -1,0 +1,4 @@
+language: rust
+dependsOn: [core, models]
+toolchains:
+  default: system

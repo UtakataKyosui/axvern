@@ -1,7 +1,17 @@
 [package]
-name = "cli"
-version = "0.1.0"
-edition = "2024"
+name = "axvern-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "axvern"
+path = "src/main.rs"
 
 [dependencies]
-clap = "4.6.7"
+axvern-core.workspace = true
+axvern-models.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true
