@@ -3,7 +3,7 @@
 Nodes live in a flat arena (Mojo does not allow recursive value types).
 Reject duplicate decoded keys, non-JSON numbers and malformed Unicode escapes.
 """
-from std.collections import List
+from std.collections import List, Set
 from std.collections.string import chr
 
 
@@ -154,6 +154,7 @@ struct Parser:
             node.text = self.string()
         elif byte == 123 or byte == 91:
             var object = byte == 123
+            var seen_keys = Set[String]()
             node.kind = Node.OBJECT if object else Node.ARRAY
             var end = 125 if object else 93
             self.position += 1
@@ -163,10 +164,10 @@ struct Parser:
                     self.whitespace()
                     if object:
                         var key = self.string()
-                        for existing in node.keys:
-                            require(
-                                existing != key, "duplicate key", "CLI-JSON"
-                            )
+                        require(
+                            key not in seen_keys, "duplicate key", "CLI-JSON"
+                        )
+                        seen_keys.add(key)
                         node.keys.append(key)
                         self.whitespace()
                         self.consume(58)

@@ -33,10 +33,9 @@ def run(binary):
     python = Path(compiler).parent / 'python'
     if not python.is_file():
         python = Path(sys.executable)
-    config = json.loads(subprocess.check_output([str(python), '-c',
-        'import json,sys,sysconfig; print(json.dumps(dict(version=list(sys.version_info[:2]), '
-        'home=sys.base_prefix, library=str(__import__("pathlib").Path(sysconfig.get_config_var("LIBDIR")) '
-        '/ sysconfig.get_config_var("LDLIBRARY")))))'], text=True))
+    subprocess.run([sys.executable, str(ROOT / 'qualities/scripts/test_python_runtime.py')], check=True)
+    config = json.loads(subprocess.check_output(
+        [str(python), str(ROOT / 'qualities/scripts/python_runtime.py')], text=True))
     if config['version'] < [3, 10] or not Path(config['library']).is_file():
         raise SystemExit('Mojo process probes require Python >=3.10 with a shared library; use the documented environment setup')
     env = os.environ.copy()

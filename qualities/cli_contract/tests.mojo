@@ -2,7 +2,7 @@
 from std.python import Python
 from contract import validate_response, string_value
 from json import Node, parse_json, require
-from probes import decode_stream, invoke
+from probes import decode_stream, invoke, pipe_environment
 from python_context import PythonContext
 
 
@@ -85,4 +85,44 @@ def test_process_boundary() raises:
             and not normal.stderr,
             "normal subprocess failed",
         )
-    print("Process boundary: UTF-8, prompt timeout and normal exit passed")
+        # A writer must fail on size before its deadline, including stderr.
+        # Keeping it alive after the write catches post-exit-only size checks.
+        for stream in range(2):
+            failed = False
+            try:
+                var code = (
+                    "import os,time; os.write("
+                    + String(stream + 1)
+                    + ", b'x' * 1048577); time.sleep(30)"
+                )
+                var args: List[String] = ["-c", code]
+                _ = invoke(
+                    python, args, String(py=root), os.environ.copy(), 3.0
+                )
+            except error:
+                failed = "CLI-JSON: probe capture exceeds" in String(error)
+            require(failed, "live output limit not enforced")
+        # A color regression that honors opt-outs must still be detected under
+        # a normal terminal environment with its output redirected to a pipe.
+        var ambient = os.environ.copy()
+        ambient["NO_COLOR"] = "1"
+        ambient["TERM"] = "dumb"
+        var env = pipe_environment(ambient)
+        args = [
+            "-c",
+            (
+                "import os; print('{}' if os.environ.get('NO_COLOR') or"
+                " os.environ.get('TERM') == 'dumb' else '\\x1b[31m{}')"
+            ),
+        ]
+        var colored = invoke(python, args, String(py=root), env)
+        failed = False
+        try:
+            _ = parse_json(colored.stdout)
+        except error:
+            failed = "CLI-COLOR" in String(error)
+        require(failed, "pipe color regression masked by opt-outs")
+    print(
+        "Process boundary: UTF-8, prompt timeout, bounded stdout/stderr, pipe"
+        " color and normal exit passed"
+    )

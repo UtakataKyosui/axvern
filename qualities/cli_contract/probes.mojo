@@ -33,49 +33,75 @@ def invoke(
     timeout: Float64 = 10.0,
 ) raises -> Captured:
     var sp = Python.import_module("subprocess")
-    var tempfile = Python.import_module("tempfile")
     var builtins = Python.import_module("builtins")
+    var selectors = Python.import_module("selectors")
+    var os = Python.import_module("os")
+    var clock = Python.import_module("time")
     var command = builtins.list()
     command.append(binary)
     for arg in args:
         command.append(arg)
-    # Files prevent a noisy child from exhausting validator memory. stdin stays
-    # open until wait completes, so prompts cannot be hidden by an immediate EOF.
-    with PythonContext(tempfile.TemporaryFile()) as stdout:
-        with PythonContext(tempfile.TemporaryFile()) as stderr:
-            with PythonContext(
-                sp.Popen(
-                    command,
-                    cwd=root,
-                    env=env,
-                    stdin=sp.PIPE,
-                    stdout=stdout,
-                    stderr=stderr,
-                )
-            ) as process:
-                var code: Int
-                try:
-                    code = Int(py=process.wait(timeout=timeout))
-                except:
-                    process.kill()
-                    process.wait()
-                    raise Error(
-                        "CLI-INPUT: invocation blocked or exceeded probe"
-                        " deadline"
+    # Bounded pipe buffers avoid writing arbitrary child output to CI disk.
+    # stdin stays open: a prompt must time out instead of silently seeing EOF.
+    var stdout = builtins.bytearray()
+    var stderr = builtins.bytearray()
+    with PythonContext(
+        sp.Popen(
+            command,
+            cwd=root,
+            env=env,
+            stdin=sp.PIPE,
+            stdout=sp.PIPE,
+            stderr=sp.PIPE,
+            start_new_session=True,
+        )
+    ) as process:
+        try:
+            var deadline = Float64(py=clock.monotonic()) + timeout
+            with PythonContext(selectors.DefaultSelector()) as selector:
+                selector.register(process.stdout, selectors.EVENT_READ, 0)
+                selector.register(process.stderr, selectors.EVENT_READ, 1)
+                while Int(py=builtins.len(selector.get_map())) > 0:
+                    var remaining = deadline - Float64(py=clock.monotonic())
+                    require(
+                        remaining > 0,
+                        "invocation exceeded probe deadline",
+                        "CLI-INPUT",
                     )
-                require(
-                    Int(py=stdout.tell()) <= 1048576
-                    and Int(py=stderr.tell()) <= 1048576,
-                    "probe capture exceeds 1MiB",
-                    "CLI-JSON",
-                )
-                stdout.seek(0)
-                stderr.seek(0)
-                return Captured(
-                    decode_stream(stdout.read()),
-                    decode_stream(stderr.read()),
-                    code,
-                )
+                    var events = selector.select(remaining)
+                    for i in range(Int(py=builtins.len(events))):
+                        var key = events[i][0]
+                        var buffer = stdout if Int(py=key.data) == 0 else stderr
+                        var available = 1048577 - Int(py=builtins.len(buffer))
+                        var chunk = os.read(key.fd, min(65536, available))
+                        if Int(py=builtins.len(chunk)) == 0:
+                            selector.unregister(key.fileobj)
+                        else:
+                            buffer.extend(chunk)
+                            require(
+                                Int(py=builtins.len(buffer)) <= 1048576,
+                                "probe capture exceeds 1MiB",
+                                "CLI-JSON",
+                            )
+            var remaining = deadline - Float64(py=clock.monotonic())
+            require(
+                remaining > 0, "invocation exceeded probe deadline", "CLI-INPUT"
+            )
+            var code: Int
+            try:
+                code = Int(py=process.wait(timeout=remaining))
+            except:
+                raise Error("CLI-INPUT: invocation exceeded probe deadline")
+            return Captured(decode_stream(stdout), decode_stream(stderr), code)
+        except error:
+            # Kill the process group too: descendants may retain the pipes even
+            # after the direct child exits. Popen's context then closes/reaps.
+            try:
+                os.killpg(process.pid, 9)
+            except:
+                process.kill()
+            process.wait()
+            raise error
 
 
 @fieldwise_init
@@ -160,6 +186,21 @@ def evaluate_case(
         raise Error(probe_case.name + ": " + String(error))
 
 
+def pipe_environment(original: PythonObject) raises -> PythonObject:
+    var env = original.copy()
+    var flags: List[String] = [
+        "NO_COLOR",
+        "CLICOLOR",
+        "CLICOLOR_FORCE",
+        "FORCE_COLOR",
+        "CI",
+    ]
+    for flag in flags:
+        env.pop(flag, None)
+    env["TERM"] = "xterm-256color"
+    return env
+
+
 def probe(binary_path: String, cases_path: String) raises:
     var pathlib = Python.import_module("pathlib")
     var os = Python.import_module("os")
@@ -172,7 +213,7 @@ def probe(binary_path: String, cases_path: String) raises:
         var config = pathlib.Path(root) / "config.toml"
         config.write_text("schema_version=1\n", encoding="utf-8")
         config.chmod(0o600)
-        var env = os.environ.copy()
+        var env = pipe_environment(os.environ)
         env.pop("AXVERN_CONFIG", None)
         env["HOME"] = root
         env["XDG_CONFIG_HOME"] = root
@@ -193,9 +234,6 @@ def probe(binary_path: String, cases_path: String) raises:
             + String(py=env.get("PATH", ""))
         )
         env["PAGER"] = String(py=helpers / "less")
-        env["NO_COLOR"] = "1"
-        env["TERM"] = "dumb"
-        env["CLICOLOR_FORCE"] = "1"
         var flags: List[String] = ["--help", "--version"]
         var expected: List[String] = ["usage:", "axvern "]
         for i in range(len(flags)):
@@ -216,10 +254,46 @@ def probe(binary_path: String, cases_path: String) raises:
                 "CLI-COLOR",
             )
             print("PASS", flags[i])
+        # Explicit opt-outs are additional checks, never prerequisites for the
+        # normal redirected-output probes above and below.
+        for i in range(2):
+            var opt_out_env = env.copy()
+            if i == 0:
+                opt_out_env["NO_COLOR"] = "1"
+            else:
+                opt_out_env["TERM"] = "dumb"
+            var args: List[String] = ["--help"]
+            var result = invoke(binary, args, root, opt_out_env)
+            require(
+                result.exit_code == 0
+                and not result.stderr
+                and "usage:" in result.stdout
+                and "\u001b" not in result.stdout,
+                "explicit color opt-out failed",
+                "CLI-COLOR",
+            )
+            print("PASS explicit-color-opt-out", i)
         var cases = load_cases(cases_path)
         for probe_case in cases:
             evaluate_case(binary, String(py=config), root, env, probe_case)
             print("PASS", probe_case.name)
+        var human_args: List[String] = [
+            "--config",
+            String(py=config),
+            "policy",
+            "check",
+            "--",
+            "true",
+        ]
+        var human = invoke(binary, human_args, root, env)
+        require(
+            human.exit_code == 0
+            and not human.stderr
+            and "\u001b" not in human.stdout,
+            "human piped output failed",
+            "CLI-COLOR",
+        )
+        print("PASS human-piped-output")
         var target = root + "/target-executed"
         config.write_text(
             "schema_version=1\n[[policy.rules]]\nid='probe'\neffect='allow'\ncommand='touch'\n",
@@ -294,4 +368,4 @@ def probe(binary_path: String, cases_path: String) raises:
             "CLI-VALIDATE",
         )
         print("PASS invalid-config-no-execution-or-leak")
-        print("CLI contract:", len(cases) + 4, "probes passed (7 rule groups)")
+        print("CLI contract:", len(cases) + 7, "probes passed (7 rule groups)")
