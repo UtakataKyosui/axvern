@@ -3,6 +3,12 @@
 `devbox run test` invokes Moon's `qualities:verify` and `qualities:pueue-spike`.
 Rust tests receive the built public CLI through `AXVERN_TEST_BIN`; use the Moon runner rather than bare Cargo tests for CLI integration coverage.
 
+`qualities:test` also runs `scripts/cli_contract.py`: a reusable schema-1 JSON envelope/exit validator and isolated public CLI probes for argument errors, limits, target argv boundaries and noninteractive approval. Run it independently with `python3 qualities/scripts/cli_contract.py /path/to/axvern`. It requires no daemon and checks no proposed future commands. Negative fixtures in `scripts/test_cli_contract.py` verify that malformed responses are rejected; backend lifecycle, successful registration and wait semantics remain covered by the Rust integration tests.
+
+The validator's `RULES` catalog links each check to its source (reviewed 2026-10-15): [CLI Guidelines](https://clig.dev/) for non-TTY behavior, discovery, color/pager suppression and early validation; [A2A CLI specification §11–12](https://github.com/a2aproject/a2a-cli/blob/main/specification/SPEC.md) for structured output separation and diagnostic redaction. These are selected interoperability principles, not a claim of full A2A conformance. The general JSON validator accepts a single pretty-printed document; the axvern profile separately enforces compact schema-1 framing, empty noninteractive JSON stderr, its existing envelope and exit numbers. External guidance permits diagnostic stderr and does not prescribe axvern's envelope. A2A-specific flags, commands and exit numbers are not imposed.
+
+Probes hold non-TTY stdin open to detect prompt hangs, use private config/cwd, trap backend/pager invocations, check help/version without valid config, and assert that policy inspection and invalid config never execute a target. Failures identify rule IDs. The runner has a 10-second invocation deadline and 1MiB capture budget per stream; these are probe safeguards, not new product limits. Discovery coverage is currently root help/version, not subcommand help or a machine-readable command catalog.
+
 - `verify`: Rust fmt/check/Clippy/build/tests; site check/build; local docs links; release build/install smoke.
 - `pueue-spike`: isolated Pueue 4.0.4 contract probes, evidence in `target/pueue-spike.json`.
 - `links`: local Markdown/MDX links and JSON navigation links resolve; no network dependency.
