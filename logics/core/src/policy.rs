@@ -4,25 +4,26 @@ use axvern_models::{
     Adapter, Approval, Error, ErrorCode, ExecutionPlan, JsonExecutionPlan, PolicyDecision,
     PolicyEffect,
 };
-use std::path::Path;
 
 /// Conservatively treat all invocations of supported shell names as shell evaluation,
 /// including combined flags, stdin scripts and script paths. Wrapper commands need their own rules.
 pub fn is_shell(program: &str) -> bool {
+    // Recognize Windows executables even when invoked from a Unix host (e.g. WSL).
+    let basename = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let normalized = basename.to_ascii_lowercase();
+    let name = normalized.strip_suffix(".exe").unwrap_or(&normalized);
     matches!(
-        Path::new(program).file_name().and_then(|s| s.to_str()),
-        Some(
-            "sh" | "bash"
-                | "dash"
-                | "zsh"
-                | "ksh"
-                | "fish"
-                | "csh"
-                | "tcsh"
-                | "pwsh"
-                | "powershell"
-                | "cmd"
-        )
+        name,
+        "sh" | "bash"
+            | "dash"
+            | "zsh"
+            | "ksh"
+            | "fish"
+            | "csh"
+            | "tcsh"
+            | "pwsh"
+            | "powershell"
+            | "cmd"
     )
 }
 pub fn evaluate(config: &Config, plan: &ExecutionPlan) -> Result<PolicyDecision, Error> {
