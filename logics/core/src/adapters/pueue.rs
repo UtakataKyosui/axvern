@@ -246,6 +246,12 @@ impl PueueAdapter {
         }
     }
     pub fn register_identified(&mut self, plan: &ExecutionPlan) -> Result<BackendIdentity, Error> {
+        if self.queue.is_empty() {
+            return Err(Error::new(
+                ErrorCode::InvalidInput,
+                "queue namespace is empty",
+            ));
+        }
         JsonExecutionPlan::try_from(plan)?;
         if plan.program.is_empty() || !plan.cwd.is_absolute() || !plan.cwd.is_dir() {
             return Err(Error::new(
@@ -301,20 +307,34 @@ impl PueueAdapter {
             .map(|s| s.identity)
             .ok_or_else(unknown)
     }
-}
-impl Adapter for PueueAdapter {
-    fn register(&mut self, plan: &ExecutionPlan) -> Result<u64, Error> {
-        self.register_identified(plan).map(|i| i.task_id)
-    }
-    fn state(&mut self, task_id: u64) -> Result<ChildState, Error> {
-        self.inspect(task_id).map(|s| s.state)
-    }
-    fn output(&mut self, task_id: u64, max_bytes: usize) -> Result<Vec<u8>, Error> {
-        self.inspect(task_id)?;
-        let id = task_id.to_string();
-        // One extra line detects truncation without fetching an unbounded full log.
+    /// Validate the task embedded in the same response as the log, so ID reuse
+    /// between status and log requests cannot expose another execution's output.
+    pub fn output_owned(
+        &self,
+        identity: &BackendIdentity,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, Error> {
+        if identity.queue != self.queue
+            || identity.queue.is_empty()
+            || identity.created_at.is_empty()
+        {
+            return Err(Error::new(
+                ErrorCode::Expired,
+                "execution belongs to another queue or has no identity",
+            ));
+        }
+        let id = identity.task_id.to_string();
         let raw = self.call(&Self::args(&["log", "--json", "--lines", "101", &id]))?;
         let value: Value = serde_json::from_slice(&raw).map_err(|_| failure("invalid log JSON"))?;
+        let task = &value[&id]["task"];
+        if task["id"].as_u64() != Some(identity.task_id)
+            || task["created_at"].as_str() != Some(&identity.created_at)
+        {
+            return Err(Error::new(
+                ErrorCode::Expired,
+                "Pueue log task identity changed or is absent",
+            ));
+        }
         let output = value[&id]["output"]
             .as_str()
             .ok_or_else(|| Error::new(ErrorCode::OutputMissing, "Pueue output missing"))?;
@@ -325,5 +345,17 @@ impl Adapter for PueueAdapter {
             ));
         }
         Ok(output.as_bytes().to_vec())
+    }
+}
+impl Adapter for PueueAdapter {
+    fn register(&mut self, plan: &ExecutionPlan) -> Result<u64, Error> {
+        self.register_identified(plan).map(|i| i.task_id)
+    }
+    fn state(&mut self, task_id: u64) -> Result<ChildState, Error> {
+        self.inspect(task_id).map(|s| s.state)
+    }
+    fn output(&mut self, task_id: u64, max_bytes: usize) -> Result<Vec<u8>, Error> {
+        let identity = self.inspect(task_id)?.identity;
+        self.output_owned(&identity, max_bytes)
     }
 }

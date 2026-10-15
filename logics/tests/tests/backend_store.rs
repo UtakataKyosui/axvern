@@ -275,3 +275,83 @@ fn status_preserves_start_and_response_failures() {
         ErrorCode::DaemonUnavailable
     );
 }
+
+#[test]
+fn log_response_identity_blocks_reuse_between_status_and_output() {
+    use std::time::Duration;
+    let temp = temp();
+    let script = temp.path().join("pueue");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env python3
+import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+original = {'id': 0, 'created_at': 'original', 'status': {'Queued': {}}}
+if 'status' in sys.argv:
+    print(json.dumps({'tasks': {'0': original}}))
+elif 'log' in sys.argv:
+    print((root / 'log.json').read_text())
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut adapter = PueueAdapter {
+        executable: script,
+        config: temp.path().join("config"),
+        queue: "q".into(),
+        timeout: Duration::from_secs(5),
+    };
+    let identity = adapter.inspect(0).unwrap().identity;
+    for task in [
+        json!({"id":0,"created_at":"replacement"}),
+        json!({"id":1,"created_at":"original"}),
+        json!({}),
+    ] {
+        fs::write(
+            temp.path().join("log.json"),
+            serde_json::to_vec(&json!({"0":{"task":task,"output":"private replacement log"}}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            adapter.output_owned(&identity, 1000).unwrap_err().code,
+            ErrorCode::Expired
+        );
+        assert_eq!(
+            adapter.output(0, 1000).unwrap_err().code,
+            ErrorCode::Expired
+        );
+    }
+    fs::write(
+        temp.path().join("log.json"),
+        br#"{"0":{"task":{"id":0,"created_at":"original"},"output":"owned"}}"#,
+    )
+    .unwrap();
+    assert_eq!(adapter.output_owned(&identity, 1000).unwrap(), b"owned");
+    let mut foreign = identity.clone();
+    foreign.queue = "another".into();
+    assert_eq!(
+        adapter.output_owned(&foreign, 1000).unwrap_err().code,
+        ErrorCode::Expired
+    );
+}
+
+#[test]
+fn empty_queue_is_rejected_before_starting_pueue() {
+    let temp = temp();
+    let mut adapter = PueueAdapter {
+        executable: temp.path().join("must-not-be-started"),
+        config: temp.path().join("config"),
+        queue: String::new(),
+        timeout: std::time::Duration::from_secs(1),
+    };
+    let plan = ExecutionPlan {
+        program: "true".into(),
+        args: vec![],
+        cwd: temp.path().into(),
+    };
+    assert_eq!(
+        adapter.register_identified(&plan).unwrap_err().code,
+        ErrorCode::InvalidInput
+    );
+}
