@@ -355,3 +355,21 @@ fn empty_queue_is_rejected_before_starting_pueue() {
         ErrorCode::InvalidInput
     );
 }
+
+#[test]
+fn inherited_backend_pipes_do_not_extend_probe_deadline() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = temp();
+    let script = root.path().join("pueue-probe");
+    fs::write(&script, "#!/bin/sh\nsleep 1 &\nprintf 'pueue 4.0.4\\n'\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let adapter = PueueAdapter {
+        executable: script,
+        config: root.path().join("config"),
+        queue: "q".into(),
+        timeout: std::time::Duration::from_millis(100),
+    };
+    let start = std::time::Instant::now();
+    assert_eq!(adapter.version().unwrap_err().code, ErrorCode::Timeout);
+    assert!(start.elapsed() < std::time::Duration::from_millis(700));
+}

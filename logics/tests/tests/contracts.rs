@@ -202,13 +202,14 @@ fn execution_id_and_json_contract() {
         assert!(s.parse::<ExecutionId>().is_err());
     }
     let mut response = Response::success(PolicyDecision {
+        matching_rule_ids: vec![],
         effect: PolicyEffect::Ask,
         reason: "approval required".into(),
         rule_id: None,
     });
     response.execution_id = Some(id);
     let json = serde_json::to_value(response).unwrap();
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["output"]["effect"], "ask");
     for key in ["state", "exit_code", "error"] {
         assert!(json[key].is_null());

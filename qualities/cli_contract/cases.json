@@ -66,7 +66,7 @@
     "expected_error": "invalid_input"
   },
   {
-    "name": "exclusive",
+    "name": "policy-cwd",
     "args": [
       "policy",
       "check",
@@ -75,8 +75,8 @@
       "--",
       "true"
     ],
-    "expected_exit": 2,
-    "expected_error": "invalid_input"
+    "expected_exit": 0,
+    "expected_error": null
   },
   {
     "name": "limit-0",
@@ -235,5 +235,49 @@
     ],
     "expected_exit": 3,
     "expected_error": "invalid_config"
+  },
+  {
+    "name": "exclusive-history-cwd",
+    "args": [
+      "history",
+      "--cwd",
+      "."
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "run-zero-wait-policy-refusal",
+    "args": [
+      "run",
+      "--wait",
+      "0s",
+      "--",
+      "true"
+    ],
+    "expected_exit": 9,
+    "expected_error": "policy_denied"
+  },
+  {
+    "name": "invalid-request-id",
+    "args": [
+      "run",
+      "--request-id",
+      "bad/key",
+      "--",
+      "true"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "doctor-invalid-scope",
+    "args": [
+      "doctor",
+      "--scope",
+      "unknown"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
   }
 ]

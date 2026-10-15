@@ -43,10 +43,11 @@ axvern --config /absolute/path/to/axvern.toml run -- sleep 5
 # Use the returned ex_… ID:
 axvern --config /absolute/path/to/axvern.toml status <execution-id>
 axvern --config /absolute/path/to/axvern.toml wait <execution-id> --timeout 30s
+axvern --config /absolute/path/to/axvern.toml result <execution-id>
 axvern --config /absolute/path/to/axvern.toml history --limit 20
 ```
 
-`run` returns after registration and durable mapping, before command completion. Registration success does not mean the child succeeded. To inspect output, use the returned Pueue ID and the same configuration:
+The default output is JSON schema 2; use `--format human` for readable text. `run` waits up to 1s after registration, returning an ID and either saved results or the current state. Use `--wait 0s` for immediate return, and `--request-id KEY` for retryable submission. Registration success does not mean the child succeeded. To inspect output, use the returned Pueue ID and the same configuration:
 
 ```sh
 pueue --config /absolute/path/to/pueue.yml log <pueue-task-id>

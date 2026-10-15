@@ -19,6 +19,42 @@ pub struct Config {
     pub replacement: Replacement,
     #[serde(default)]
     pub execution: Execution,
+    #[serde(default)]
+    pub results: Results,
+    #[serde(default)]
+    pub discovery: Discovery,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Results {
+    pub retention_seconds: u64,
+    pub capacity_bytes: u64,
+    pub max_artifact_bytes: u64,
+}
+impl Default for Results {
+    fn default() -> Self {
+        Self {
+            retention_seconds: 604800,
+            capacity_bytes: 1073741824,
+            max_artifact_bytes: 67108864,
+        }
+    }
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Discovery {
+    pub max_items: u64,
+    pub max_entries: u64,
+    pub timeout_ms: u64,
+}
+impl Default for Discovery {
+    fn default() -> Self {
+        Self {
+            max_items: 10000,
+            max_entries: 100000,
+            timeout_ms: 60000,
+        }
+    }
 }
 /// Explicit backend configuration avoids Pueue's project-local config discovery.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -70,6 +106,8 @@ impl Default for Config {
             policy: Policy::default(),
             replacement: Replacement::default(),
             execution: Execution::default(),
+            results: Results::default(),
+            discovery: Discovery::default(),
         }
     }
 }
@@ -84,6 +122,16 @@ impl Config {
     pub fn validate(&self) -> Result<(), Error> {
         if self.schema_version != 1 {
             return Err(invalid("unsupported schema_version"));
+        }
+        if !(3600..=365 * 86400).contains(&self.results.retention_seconds)
+            || !(1048576..=1099511627776).contains(&self.results.capacity_bytes)
+            || !(1024..=1073741824).contains(&self.results.max_artifact_bytes)
+            || self.results.max_artifact_bytes > self.results.capacity_bytes
+            || !(1..=100000).contains(&self.discovery.max_items)
+            || !(self.discovery.max_items..=1000000).contains(&self.discovery.max_entries)
+            || !(1000..=600000).contains(&self.discovery.timeout_ms)
+        {
+            return Err(invalid("invalid results/discovery limits"));
         }
         if self.policy.default != PolicyEffect::Ask {
             return Err(invalid("policy.default must be ask"));

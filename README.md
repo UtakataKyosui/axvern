@@ -2,7 +2,7 @@
 
 Rust 製の非同期コマンド実行 CLI です。Pueue 4.0.4 に実行を委譲し、Policy と非対話時の承認拒否、独自実行 ID、状態照会、履歴、環境診断を提供します。
 
-現在のソースで実装済み: `run` / `status` / `wait` / `history` / `doctor` / `policy check`。リリース前です。ライセンス・バイナリ配布先・レジストリ・公開サイトのホスティングは未決定で、この作業では公開・デプロイを行いません。
+現在のソースで実装済み: `run` / `status` / `wait` / `result` / `history` / `doctor` / `policy check`。リリース前です。ライセンス・バイナリ配布先・レジストリ・公開サイトのホスティングは未決定で、この作業では公開・デプロイを行いません。
 
 ## Build / install
 
@@ -50,7 +50,7 @@ pueue --config /absolute/path/to/pueue.yml log <pueue-task-id>
 axvern run -- true </dev/null
 ```
 
-`run` の成功は登録・ID 保存の成功です。子の成功は `status` / `wait` で確認します。timeout はジョブを停止しません。引数は `--` 以降をそのまま分離し、任意シェル評価は既定で拒否します。Policy は OS sandbox ではありません。
+既定出力は JSON schema 2。`run` は既定1秒だけ待ち、IDと観測状態・保存済み結果を返します。`--wait 0s` は即時返却、`--request-id KEY` は同じ登録の再送に使えます。子の成功は `status` / `wait`、保存済みの出力は `result` で確認します。timeout はジョブを停止しません。引数は `--` 以降をそのまま分離し、任意シェル評価は既定で拒否します。Policy は OS sandbox ではありません。
 
 ## Documentation
 
