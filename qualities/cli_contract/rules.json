@@ -1,0 +1,30 @@
+{
+  "CLI-JSON": {
+    "description": "Exactly one UTF-8 JSON document; no stdout prose or terminal escapes",
+    "source": "https://github.com/a2aproject/a2a-cli/blob/main/specification/SPEC.md#113-machine-readable-output-json-and-its-streamed-form-jsonl"
+  },
+  "CLI-INPUT": {
+    "description": "Non-TTY invocation must finish without reading interactive input",
+    "source": "https://clig.dev/#interactivity"
+  },
+  "CLI-HELP": {
+    "description": "Help and version are discoverable without configuration",
+    "source": "https://clig.dev/#help"
+  },
+  "CLI-COLOR": {
+    "description": "Piped output is uncolored and does not invoke a pager",
+    "source": "https://clig.dev/#output"
+  },
+  "CLI-VALIDATE": {
+    "description": "Reject invalid input before performing side effects",
+    "source": "https://clig.dev/#robustness"
+  },
+  "CLI-SECRETS": {
+    "description": "Diagnostics must not echo secret configuration values",
+    "source": "https://github.com/a2aproject/a2a-cli/blob/main/specification/SPEC.md#12-authentication"
+  },
+  "AXV-SCHEMA": {
+    "description": "Schema-1 fields, typed errors and exit mapping",
+    "source": "sites/axvern-document-site/docs/en/cli.md"
+  }
+}

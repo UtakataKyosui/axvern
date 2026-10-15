@@ -1,0 +1,497 @@
+[
+  {
+    "name": "null envelope",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": true,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "failed child",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": \"failed\", \"exit_code\": 23, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 10,
+    "mode": "response",
+    "valid": true,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "partial result",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"executions\": []}, \"error\": {\"code\": \"partial_result\", \"message\": \"offline\"}}\n",
+    "stderr": "",
+    "exit_code": 11,
+    "mode": "response",
+    "valid": true,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "doctor fail",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"level\": \"fail\"}, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 12,
+    "mode": "response",
+    "valid": true,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "UUID and running",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": \"ex_550e8400-e29b-41d4-a716-446655440000\", \"state\": \"running\", \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": true,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "missing fields",
+    "stdout": "{}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "boolean schema",
+    "stdout": "{\"schema_version\": true, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "bad ID",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": \"axv_bad\", \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "bad state",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": \"unknown\", \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "boolean exit",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": true, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "array output",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": [], \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "stderr",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "warning",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "two docs",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "missing newline",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "wrong exit",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\", \"message\": \"bad\"}}\n",
+    "stderr": "",
+    "exit_code": 3,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "unknown code",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invented\", \"message\": \"bad\"}}\n",
+    "stderr": "",
+    "exit_code": 1,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "wrong child state",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 10,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "wrong doctor output",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 12,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "duplicate schema",
+    "stdout": "{\"schema_version\":1,\"schema_version\":1}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "NaN",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": {\"value\": NaN}, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "pretty",
+    "stdout": "{\n \"data\": []\n}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": true,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "escaped ESC",
+    "stdout": "{\"data\":\"\\u001b\"}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": true,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "prose",
+    "stdout": "progress\n{}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "two docs",
+    "stdout": "{}{}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "duplicate",
+    "stdout": "{\"a\":1,\"a\":2}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "NaN",
+    "stdout": "NaN",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "Infinity",
+    "stdout": "Infinity",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "raw ANSI",
+    "stdout": "\u001b[31m{}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-COLOR"
+  },
+  {
+    "name": "nested duplicates",
+    "stdout": "{\"x\":{\"a\":1,\"a\":2}}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "escaped duplicate",
+    "stdout": "{\"a\":1,\"\\u0061\":2}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "numbers",
+    "stdout": "[-0,0,1,-42,1.25,1e2,1E-2,true,false,null]",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": true,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "leading zero",
+    "stdout": "01",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "trailing comma",
+    "stdout": "[1,]",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "object trailing comma",
+    "stdout": "{\"a\":1,}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "bad escape",
+    "stdout": "\"\\q\"",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "unpaired surrogate",
+    "stdout": "\"\\ud800\"",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "low surrogate",
+    "stdout": "\"\\udc00\"",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "valid Unicode",
+    "stdout": "{\"日本語\":\"\\ud83d\\udd25\"}",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": true,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "truncated string",
+    "stdout": "\"hello",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "control byte",
+    "stdout": "\"a\nb\"",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "missing exponent",
+    "stdout": "1e+",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "missing fraction",
+    "stdout": "1.",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": false,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "nested arrays",
+    "stdout": "[[[],{}]]",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "json",
+    "valid": true,
+    "rule": "CLI-JSON"
+  },
+  {
+    "name": "exit i32 min",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": -2147483648, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": true,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "exit i32 max",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": 2147483647, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": true,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "exit i32 overflow",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": 2147483648, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "exit huge",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": 999999999999999999999999999999999999999, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "float schema",
+    "stdout": "{\"schema_version\": 1.0, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "numeric ID",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": 1, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "boolean state",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": true, \"exit_code\": null, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "string child exit",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": \"0\", \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "float child exit",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": 1.0, \"output\": null, \"error\": null}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "error array",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": []}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "error message missing",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\"}}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  },
+  {
+    "name": "error message number",
+    "stdout": "{\"schema_version\": 1, \"execution_id\": null, \"state\": null, \"exit_code\": null, \"output\": null, \"error\": {\"code\": \"invalid_input\", \"message\": 1}}\n",
+    "stderr": "",
+    "exit_code": 0,
+    "mode": "response",
+    "valid": false,
+    "rule": "AXV-SCHEMA"
+  }
+]
