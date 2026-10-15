@@ -56,6 +56,15 @@ impl Default for Discovery {
         }
     }
 }
+impl Discovery {
+    pub fn limits(&self) -> axvern_models::DiscoveryLimits {
+        axvern_models::DiscoveryLimits {
+            max_items: self.max_items,
+            max_entries: self.max_entries,
+            timeout_ms: self.timeout_ms,
+        }
+    }
+}
 /// Explicit backend configuration avoids Pueue's project-local config discovery.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
