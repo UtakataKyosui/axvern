@@ -135,7 +135,9 @@ impl ExecutionStore {
         if final_path.symlink_metadata().is_ok() {
             let existing = self.read(&record.execution_id)?;
             return if existing == *record {
-                Ok(())
+                // The prior rename may have succeeded while its durability
+                // barrier failed. Recovery must retry that barrier too.
+                io(io(File::open(&self.root))?.sync_all())
             } else {
                 Err(Error::new(
                     ErrorCode::StoreFailure,
