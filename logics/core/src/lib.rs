@@ -1,5 +1,6 @@
 //! Core use cases and concrete I/O boundaries.
 pub mod adapters;
+pub mod analyze;
 pub mod config;
 pub mod discovery;
 pub mod doctor;

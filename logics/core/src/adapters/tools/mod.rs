@@ -239,6 +239,7 @@ impl Issues {
                 code,
                 message: message.into(),
                 path,
+                section: None,
             });
         }
     }

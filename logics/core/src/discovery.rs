@@ -31,7 +31,7 @@ pub struct Prepared {
 fn invalid(code: ErrorCode, message: &str) -> Error {
     Error::new(code, message)
 }
-fn target_error(e: &std::io::Error, requested: &Path) -> Error {
+pub(crate) fn target_error(e: &std::io::Error, requested: &Path) -> Error {
     match e.kind() {
         std::io::ErrorKind::NotFound if requested.symlink_metadata().is_ok() => {
             invalid(ErrorCode::InvalidTarget, "path is a broken symbolic link")
@@ -45,7 +45,7 @@ fn target_error(e: &std::io::Error, requested: &Path) -> Error {
     }
 }
 /// An explicit root may be a symbolic link or ignored, but never Git's own storage.
-fn resolve(path: Option<&Path>, cwd: &Path) -> Result<PathBuf, Error> {
+pub(crate) fn resolve(path: Option<&Path>, cwd: &Path) -> Result<PathBuf, Error> {
     let requested = path.map_or_else(|| cwd.to_path_buf(), |p| cwd.join(p));
     let resolved = requested
         .canonicalize()

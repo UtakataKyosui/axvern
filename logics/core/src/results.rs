@@ -45,6 +45,10 @@ pub struct Manifest {
     bytes: u64,
     truncated: bool,
     pub error: Option<Error>,
+    /// State of a logical parent, which may be `partial`; `state` then only tells whether
+    /// any child succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate_state: Option<TaskState>,
 }
 fn run_kind() -> String {
     "run".into()
@@ -256,6 +260,7 @@ pub fn reserve(
         bytes: 0,
         truncated: false,
         error: None,
+        aggregate_state: None,
     };
     publish(&dir, &m)?;
     let file = io(OpenOptions::new()
@@ -325,6 +330,7 @@ pub(crate) fn reserve_or_record(
                     bytes: 0,
                     truncated: false,
                     error: Some(error.clone()),
+                    aggregate_state: None,
                 };
                 let _ = publish(&dir, &unavailable);
             }
@@ -730,9 +736,154 @@ fn structured_output(
     position: u64,
     index: u64,
 ) -> Value {
-    json!({"result_availability":"available", "result":{"kind":m.kind, "summary":head["summary"], "items":items,
+    let mut output = json!({"result_availability":"available", "result":{"kind":m.kind, "summary":head["summary"], "items":items,
         "completeness":head["completeness"], "errors":head["errors"], "warnings":head["warnings"],
-        "page":{"has_more":position<m.bytes,"next_cursor":if position<m.bytes { Some(cursor(&m.execution_id,position,index)) } else { None }}}})
+        "page":{"has_more":position<m.bytes,"next_cursor":if position<m.bytes { Some(cursor(&m.execution_id,position,index)) } else { None }}}});
+    // An aggregate repeats its children's outcomes on every page.
+    if let Some(children) = head.get("children") {
+        output["result"]["children"] = children.clone();
+    }
+    output
+}
+/// The stored header of a structured result: summary, completeness, issues and, for an
+/// aggregate, its children. None without a manifest; a null header when no artifact remains.
+pub fn header(
+    store: &ExecutionStore,
+    settings: &Results,
+    id: &ExecutionId,
+) -> Result<Option<(Manifest, Value)>, Error> {
+    let _lock = store.lock()?;
+    maintain(store, settings, 0)?;
+    let dir = directory(store)?;
+    let Some(m) = read(&dir, id)? else {
+        return Ok(None);
+    };
+    if m.availability != "available" || m.kind == "run" {
+        return Ok(Some((m, Value::Null)));
+    }
+    let path = dir.join(format!("{id}.output"));
+    private(&path, false)?;
+    let mut line = Vec::new();
+    io(BufReader::new(io(File::open(path))?).read_until(b'\n', &mut line))?;
+    let head = serde_json::from_slice(&line).map_err(|_| failure())?;
+    Ok(Some((m, head)))
+}
+/// Holds the store lock while a result is derived from other stored results, so that the
+/// inputs cannot be evicted half-read and the derived result is published at most once.
+pub(crate) struct Derivation<'a> {
+    store: &'a ExecutionStore,
+    settings: &'a Results,
+    dir: PathBuf,
+    _lock: File,
+}
+impl<'a> Derivation<'a> {
+    pub(crate) fn begin(store: &'a ExecutionStore, settings: &'a Results) -> Result<Self, Error> {
+        let lock = store.lock()?;
+        maintain(store, settings, 0)?;
+        Ok(Self {
+            dir: directory(store)?,
+            store,
+            settings,
+            _lock: lock,
+        })
+    }
+    pub(crate) fn manifest(&self, id: &ExecutionId) -> Result<Option<Manifest>, Error> {
+        read(&self.dir, id)
+    }
+    /// Header and item lines (each ending in a newline) of an available structured result.
+    pub(crate) fn document(&self, m: &Manifest) -> Result<(Value, Vec<Vec<u8>>), Error> {
+        if m.availability != "available" || m.kind == "run" {
+            return Err(failure());
+        }
+        let path = self.dir.join(format!("{}.output", m.execution_id));
+        private(&path, false)?;
+        let mut reader = BufReader::new(io(File::open(path))?.take(m.bytes));
+        let mut header = Vec::new();
+        io(reader.read_until(b'\n', &mut header))?;
+        let head = serde_json::from_slice(&header).map_err(|_| failure())?;
+        let mut items = Vec::new();
+        loop {
+            let mut line = Vec::new();
+            if io(reader.read_until(b'\n', &mut line))? == 0 {
+                break;
+            }
+            items.push(line);
+        }
+        Ok((head, items))
+    }
+    /// Bytes available for a new artifact of up to `wanted` bytes. Older finished results may
+    /// be evicted to make room, as for any new result.
+    pub(crate) fn budget(&self, wanted: u64) -> Result<u64, Error> {
+        let wanted = wanted.min(self.settings.max_artifact_bytes);
+        let free = maintain(self.store, self.settings, wanted.saturating_add(32768))?;
+        if free < 33792 {
+            return Err(Error::new(
+                ErrorCode::StorageFull,
+                "no capacity for new result",
+            ));
+        }
+        Ok(wanted.min(free - 32768))
+    }
+    /// Publish `header` and `items` as the immutable available result of `id`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn publish(
+        &self,
+        id: &ExecutionId,
+        kind: &str,
+        aggregate: TaskState,
+        finished_at: u64,
+        header: &[u8],
+        items: &[Vec<u8>],
+        truncated: bool,
+    ) -> Result<Manifest, Error> {
+        if read(&self.dir, id)?.is_some() {
+            return Err(Error::new(
+                ErrorCode::RequestConflict,
+                "execution already has a result manifest",
+            ));
+        }
+        // Bytes left by an interrupted earlier attempt have no manifest and are replaced.
+        for extension in ["spool", "output"] {
+            let path = self.dir.join(format!("{id}.{extension}"));
+            if path.symlink_metadata().is_ok() {
+                private(&path, false)?;
+                io(fs::remove_file(path))?;
+            }
+        }
+        let spool = self.dir.join(format!("{id}.spool"));
+        let mut file = io(OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&spool))?;
+        io(file.write_all(header))?;
+        for line in items {
+            io(file.write_all(line))?;
+        }
+        io(file.sync_all())?;
+        let bytes = io(file.metadata())?.len();
+        io(fs::rename(spool, self.dir.join(format!("{id}.output"))))?;
+        let m = Manifest {
+            schema_version: 1,
+            execution_id: id.clone(),
+            finished_at: Some(finished_at),
+            state: Some(if aggregate == TaskState::Failed {
+                ChildState::Failed
+            } else {
+                ChildState::Done
+            }),
+            exit_code: None,
+            availability: "available".into(),
+            kind: kind.into(),
+            reserved_bytes: 0,
+            bytes,
+            truncated,
+            error: None,
+            aggregate_state: Some(aggregate),
+        };
+        publish(&self.dir, &m)?;
+        Ok(m)
+    }
 }
 /// Serialized form of a discovery document: header line, then one line per item.
 pub(crate) fn encode_document(doc: &DiscoveryDocument) -> Result<(Vec<u8>, Vec<Vec<u8>>), Error> {
