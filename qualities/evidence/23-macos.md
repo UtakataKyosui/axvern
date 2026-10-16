@@ -6,7 +6,7 @@ Date: 2026-10-16. Platform: macOS arm64, non-interactive stdout/stderr (no TTY).
 
 | Tool | Verdict | Role |
 | --- | --- | --- |
-| git | Adoptable as the diff source of truth for `code diff` (#48) with fixed argv | `diff` generation |
+| git | Not adopted for worktree diffs: fixed argv still executes configured filters | candidate diff source only after verified isolation |
 | delta | Adoptable for human display only, via staged execution | optional formatter |
 | dust | Not adopted for `system disk-usage` (#49) | none until the conditions below hold |
 | procs | Not adopted for `system processes` (#50) | none until the conditions below hold |
@@ -15,18 +15,20 @@ No public command is added. `doctor --scope all` reports git/delta/dust/procs as
 
 ## git + delta
 
-- Fixed argv for the structured result: `git --no-pager -c color.ui=never diff [--cached] --no-ext-diff --no-textconv --no-color -M --raw -z` (entries with `R100`/`M`/`A` status, NUL-separated, newline and space in names preserved) plus `--numstat -z` (binary shows `-\t-`) and the unified patch for hunks. Binary files print `Binary files ... differ` only.
+- Candidate argv for the structured result, **not approved for hostile configuration**: `git --no-pager -c color.ui=never diff [--cached] --no-ext-diff --no-textconv --no-color -M --raw -z` (entries with `R100`/`M`/`A` status, NUL-separated, newline and space in names preserved) plus `--numstat -z` (binary shows `-\t-`) and the unified patch for hunks. Binary files print `Binary files ... differ` only.
 - User/repo configuration is hostile by default and must be neutralized:
   - `diff.external` set: plain `git diff` exits 128; `--no-ext-diff` restores exit 0.
   - `color.ui=always` leaks ANSI into captured output; `--no-color` / `-c color.ui=never` removes it.
   - A `diff.<driver>.textconv` configured through `.gitattributes` executes during plain `git diff` (observed side effect); with `--no-textconv` it does not.
+  - **Review correction:** `.gitattributes` assigning `filter=fixture` still causes `filter.fixture.clean` or `filter.fixture.process` to execute for a worktree diff with the candidate argv. Neither `--no-ext-diff` nor `--no-textconv` disables content filters. `python3 qualities/scripts/git_filter_spike.py` reproduces this on git 2.55.0 in an isolated temporary repository. The fixture clean program writes a marker and passes stdin through; raw, numstat and patch all write the marker and exit 0. The process fixture writes a marker then deliberately exits before its protocol handshake; all three forms launch it and exit 128 with `filter.fixture.required=true`. This verifies program execution, not successful process-protocol conversion. These measurements concern worktree diffs, not `--cached`.
   - `core.pager` is not used with non-TTY stdout, but `--no-pager` keeps this independent of that.
 - Exit codes: success 0 with or without differences; `--exit-code`/`--quiet` return 1 on differences and must not be used (collides with error handling). Outside a repository `git diff` exits 129 (it falls back to `--no-index` usage); `git rev-parse --show-toplevel` exits 128 and is the repository check to use. Unknown revision exits 128.
 - Unborn repository: `git diff --cached` works against the empty tree (status `A`, exit 0). Untracked files are never listed.
 - Rename: `-M` gives `R100` for pure renames; behaviour at partial similarity thresholds (`-M50%` with a content change) was not stressed, so keep the fixed default and report unsure cases as add/delete as #48 requires.
 - delta consumes a patch on stdin only. It exits 0 for invalid or empty input and for failed upstream, so it cannot signal that the patch was bad. It emits ANSI even when piped and ignores `NO_COLOR`. It reads the user's gitconfig `[delta]` section unless `--no-gitconfig` is given. `--paging=never` is required to avoid a pager.
 - Piping `git diff | delta` loses git's exit status without `pipefail` and gives no way to capture the structured result once. Missing delta exits 127 from the shell.
-- Policy: run git first and capture its status and stdout, then feed the captured patch to `delta --no-gitconfig --paging=never` as a second fixed step. A delta failure or absence keeps the git result and adds a warning plus plain text. Do not pass a shell pipeline to Pueue. Pueue registration of a two-step fixed wrapper is a #48 implementation matter; this spike did not register Pueue tasks.
+- Adoption gate for #48: worktree diff remains unsupported until configuration/attributes are isolated or every applicable clean/process filter is disabled with verified coverage. An acceptable implementation must prove that clean and process marker fixtures are never launched for raw, numstat and patch output, including filters from repository/user configuration and nested attributes. No neutralization scheme was validated in this spike; the candidate argv alone is insufficient.
+- Once a safe git source is established, run it first and capture its status and stdout, then feed the captured patch to `delta --no-gitconfig --paging=never` as a second fixed step. A delta failure or absence keeps the git result and adds a warning plus plain text. Do not pass a shell pipeline to Pueue. Pueue registration of a two-step fixed wrapper is a #48 implementation matter; this spike did not register Pueue tasks.
 
 ## dust
 
@@ -50,6 +52,7 @@ No public command is added. `doctor --scope all` reports git/delta/dust/procs as
 
 ## Verification
 
+- Review follow-up: `python3 qualities/scripts/git_filter_spike.py` verifies six filter invocations (clean/process × raw/numstat/patch) with the candidate argv. No filter-safe git adapter or public command is introduced.
 - `cargo fmt --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` and `AXVERN_TEST_BIN=<debug binary> cargo test --workspace --locked` (45 tests) pass. The doctor test asserts that `git`, `delta`, `dust` and `procs` are optional warnings in the `all` scope.
 - The Mojo CLI contract evaluator and Moon were not run (not installed here).
 - delta was installed from the upstream release archive because the Homebrew formula (`git-delta`) could not be installed in this environment; dust and procs came from Homebrew.
