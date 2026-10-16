@@ -263,7 +263,11 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
             input.id = Some(id.parse()?)
         }
         ["history" | "doctor"] if boundary == args.len() => (),
-        ["fs", sub @ ("list" | "find" | "search" | "read" | "analyze"), rest @ ..] => {
+        [
+            "fs",
+            sub @ ("list" | "find" | "search" | "read" | "analyze"),
+            rest @ ..,
+        ] => {
             // After `--` everything is a literal operand, so patterns may start with a dash.
             let mut words: Vec<String> = rest.iter().map(|w| w.to_string()).collect();
             for word in &input.target {
@@ -759,8 +763,11 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                         let parent: ParentRecord =
                             serde_json::from_value(value["record"].clone()).expect("parent record");
                         if parent.analysis.is_some() {
-                            match analyze::stored(&service.store, service.result_settings(), &parent)
-                            {
+                            match analyze::stored(
+                                &service.store,
+                                service.result_settings(),
+                                &parent,
+                            ) {
                                 Ok(Some(state)) => {
                                     *value = analysis_view(&parent, &state);
                                     continue;
@@ -858,7 +865,13 @@ fn analyze(input: &Input, config: axvern_core::config::Config) -> (Response<Valu
     };
     let store = service.store.clone();
     let registration = analyze::register(&store, &prepared, |child| {
-        service.run_captured_job(&runner, &child.plan, Some(&child.job), interactive, approval)
+        service.run_captured_job(
+            &runner,
+            &child.plan,
+            Some(&child.job),
+            interactive,
+            approval,
+        )
     });
     match registration {
         Ok((record, registration_error)) => {
@@ -929,12 +942,17 @@ fn analysis_start_response(
         Err(e) => {
             let (mut response, _) = failure(e);
             response.execution_id = Some(record.execution_id.clone());
-            response.output = Some(json!({"record":record,"result_availability":"pending","result":null}));
+            response.output =
+                Some(json!({"record":record,"result_availability":"pending","result":null}));
             return (response, 0);
         }
     };
     // Running out of the wait budget is not an error; the children continue.
-    if state.error.as_ref().is_some_and(|e| e.code == ErrorCode::Timeout) {
+    if state
+        .error
+        .as_ref()
+        .is_some_and(|e| e.code == ErrorCode::Timeout)
+    {
         state.error = None;
     }
     // Leave room for the parent record next to the first page.

@@ -181,6 +181,7 @@ fn help_lists_the_discovery_commands() {
         "fs find",
         "fs search",
         "fs read",
+        "fs analyze",
         "code search",
         "code stats",
     ] {
@@ -324,4 +325,63 @@ fn code_tools_need_policy_and_the_right_build() {
         );
         assert_eq!(json["execution_id"], serde_json::Value::Null);
     }
+}
+
+#[test]
+fn analyze_is_validated_and_refused_before_any_child_is_registered() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    fs::create_dir(dir.join("w")).unwrap();
+    fs::write(dir.join("w/a.rs"), "fn a() {}\n").unwrap();
+    let store = dir.join("store");
+    let execution = format!(
+        "[execution]\nstore={}\n",
+        serde_json::to_string(&store).unwrap()
+    );
+    let ask = config(&dir, &execution);
+    for (args, error) in [
+        (vec!["fs", "analyze"], "invalid_input"),
+        (vec!["fs", "analyze", "w", "x"], "invalid_input"),
+        (vec!["fs", "analyze", "w", "--depth", "0"], "invalid_input"),
+        (vec!["fs", "analyze", "w", "--depth", "33"], "invalid_input"),
+        (vec!["fs", "analyze", "w", "--glob"], "invalid_input"),
+        (
+            vec!["fs", "analyze", "w", "--lang", "rust"],
+            "invalid_input",
+        ),
+        (vec!["fs", "analyze", "gone"], "target_not_found"),
+    ] {
+        let (code, json) = cli(&dir, &ask, None, &args);
+        assert_eq!(
+            (code, &json["error"]["code"]),
+            (2, &error.into()),
+            "{args:?}"
+        );
+        assert_eq!(json["command"], "fs analyze");
+        assert_eq!(json["execution_id"], serde_json::Value::Null);
+    }
+    // AC-SPEC-45-03: one child refused by Policy (asked, or denied) registers no child at all.
+    let allow =
+        |tool: &str| format!("[[policy.rules]]\nid='{tool}'\neffect='allow'\ncommand='{tool}'\n");
+    for rules in [
+        String::new(),
+        allow("fd"),
+        allow("fd") + "[[policy.rules]]\nid='d'\neffect='deny'\ncommand='tokei'\n",
+    ] {
+        let refused = config(&dir, &format!("{rules}{execution}"));
+        let (code, json) = cli(&dir, &refused, None, &["fs", "analyze", "w"]);
+        assert_eq!((code, &json["error"]["code"]), (9, &"policy_denied".into()));
+        assert_eq!(json["execution_id"], serde_json::Value::Null);
+        assert!(!store.exists(), "nothing may be registered");
+    }
+    // A missing tool is found before registration too.
+    let allowed = config(
+        &dir,
+        &format!("{}{}{execution}", allow("fd"), allow("tokei")),
+    );
+    let empty = dir.join("empty-path");
+    fs::create_dir(&empty).unwrap();
+    let (code, json) = cli(&dir, &allowed, Some(&empty), &["fs", "analyze", "w"]);
+    assert_eq!((code, &json["error"]["code"]), (5, &"missing_tool".into()));
+    assert!(!store.exists());
 }
