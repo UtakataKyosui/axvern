@@ -408,6 +408,50 @@ fn rg_binary_files_non_utf8_names_and_lines_and_the_match_limit() {
         cut.document.completeness.truncation_reasons,
         [TruncationReason::MaxItems]
     );
+
+    // Overflow must not stop before the binary classification arrives, even
+    // when events are split across separate worker reads.
+    let mut binary = rg_event("begin", serde_json::json!({"path": text("bin")}));
+    for line in 1..=100 {
+        binary.extend(rg_event(
+            "match",
+            serde_json::json!({"lines": text("TODO\n"), "line_number": line, "submatches": []}),
+        ));
+    }
+    let end = rg_event("end", serde_json::json!({"binary_offset": 1000}));
+    let text_file = many;
+    let classified = run(
+        &search_job("/r", 2),
+        &[&binary, &end, &text_file],
+        ok(0),
+        b"",
+    );
+    assert_eq!(classified.document.items.len(), 2);
+    assert!(matches!(
+        classified.document.summary,
+        DiscoverySummary::Search {
+            binary_files_skipped: 1,
+            ..
+        }
+    ));
+    assert!(
+        classified
+            .document
+            .items
+            .iter()
+            .all(|item| matches!(item, DiscoveryItem::Match(m) if m.path == "f"))
+    );
+
+    let interrupted = run(
+        &search_job("/r", 2),
+        &[&binary],
+        TargetExit {
+            stopped: Some(Stop::Truncated(TruncationReason::Timeout)),
+            ..Default::default()
+        },
+        b"",
+    );
+    assert!(interrupted.document.items.is_empty());
 }
 
 fn read_job(from_line: u64, lines: u32) -> DiscoveryJob {
