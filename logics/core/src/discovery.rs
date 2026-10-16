@@ -454,6 +454,18 @@ fn write_artifact(
         document.completeness = Completeness::new(reasons, document.completeness.partial);
         header = results::encode_document(document)?.0;
     }
+    if header.len() as u64
+        + items[..keep]
+            .iter()
+            .map(|line| line.len() as u64)
+            .sum::<u64>()
+        > budget
+    {
+        return Err(Error::new(
+            ErrorCode::OutputLimitTooSmall,
+            "result header exceeds the artifact reservation",
+        ));
+    }
     let failure = |_| Error::new(ErrorCode::StoreFailure, "result store unavailable");
     file.write_all(&header).map_err(failure)?;
     for line in &items[..keep] {
@@ -499,4 +511,35 @@ pub fn run_worker(
         ChildState::Done => 0,
         _ => exit_code.filter(|c| *c != 0).unwrap_or(1),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_header_is_rejected_before_writing() {
+        let path = std::env::temp_dir().join(format!("axvern-header-{}", std::process::id()));
+        let mut file = File::create(&path).unwrap();
+        let mut document = DiscoveryDocument {
+            summary: DiscoverySummary::Search {
+                root: "/r".into(),
+                pattern: "x".repeat(4096),
+                binary_files_skipped: 0,
+            },
+            items: Vec::new(),
+            completeness: Completeness::new(Vec::new(), false),
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        };
+        assert_eq!(
+            write_artifact(&mut file, &mut document, 1024)
+                .unwrap_err()
+                .code,
+            ErrorCode::OutputLimitTooSmall
+        );
+        assert_eq!(file.metadata().unwrap().len(), 0);
+        drop(file);
+        fs::remove_file(path).unwrap();
+    }
 }

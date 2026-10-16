@@ -146,6 +146,7 @@ struct OpenFile {
     matches: Vec<PendingMatch>,
     issues: Vec<ResultIssue>,
     skipped: bool,
+    overflow: bool,
 }
 struct RgNormalizer {
     summary_root: String,
@@ -265,11 +266,12 @@ impl RgNormalizer {
             matches: Vec::new(),
             issues: Vec::new(),
             skipped,
+            overflow: false,
         });
         Flow::Continue
     }
     fn context_line(&mut self, body: &Value) {
-        let Some(file) = self.file.as_mut().filter(|f| !f.skipped) else {
+        let Some(file) = self.file.as_mut().filter(|f| !f.skipped && !f.overflow) else {
             return;
         };
         let (Some(Data::Text(text)), Some(number)) =
@@ -302,7 +304,10 @@ impl RgNormalizer {
             }
         };
         if self.matches >= self.limits.max_items {
-            return self.stop(Stop::Truncated(TruncationReason::MaxItems));
+            // Keep reading until `end` classifies this file as text or binary.
+            // Only one overflow bit is needed; additional matches need no buffering.
+            file.overflow = true;
+            return Flow::Continue;
         }
         self.matches += 1;
         let text = text.trim_end_matches(['\n', '\r']);
@@ -370,6 +375,9 @@ impl RgNormalizer {
             self.bytes += size;
             self.items.push(item);
         }
+        if file.overflow {
+            return self.stop(Stop::Truncated(TruncationReason::MaxItems));
+        }
         Flow::Continue
     }
     fn stderr(&mut self, stderr: &[u8]) -> bool {
@@ -430,8 +438,8 @@ impl Normalizer for RgNormalizer {
         Flow::Continue
     }
     fn finish(mut self: Box<Self>, exit: &TargetExit, stderr: &[u8]) -> DiscoveryOutcome {
-        // A file cut short by a stop still contributes what was read.
-        let _ = self.flush();
+        // Without `end`, binary classification is unknown. Never publish that file.
+        self.file = None;
         let stop = self.stop.or(exit.stopped);
         let invalid_pattern = self.stderr(stderr);
         let mut state = ChildState::Done;
