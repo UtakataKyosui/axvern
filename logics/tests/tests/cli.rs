@@ -344,7 +344,9 @@ fn doctor_tool_and_store_failures_are_structured() {
     assert_eq!(find(&checks, "hyperfine").unwrap()["level"], "fail");
     assert!(find(&checks, "eza").is_none());
     let (_, checks) = scoped("all");
-    assert_eq!(find(&checks, "delta").unwrap()["level"], "warning");
+    for optional in ["git", "delta", "dust", "procs"] {
+        assert_eq!(find(&checks, optional).unwrap()["level"], "warning");
+    }
     assert!(find(&checks, "samply").is_some());
     let (code, checks) = scoped("core");
     assert_eq!(code, 0);

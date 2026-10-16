@@ -209,6 +209,7 @@ pub fn diagnose_scope_with_timeout(
     }
     if scope == "all" {
         for (tool, purpose) in [
+            ("git", "diff source of truth"),
             ("delta", "diff presentation"),
             ("dust", "disk usage"),
             ("procs", "process inspection"),
