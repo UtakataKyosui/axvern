@@ -627,3 +627,45 @@ fn a_large_aggregate_is_paged_and_a_small_budget_truncates_the_tree() {
     );
     assert!(header.len() + lines.iter().map(Vec::len).sum::<usize>() <= 8192);
 }
+
+#[test]
+fn aggregate_rejects_an_oversized_header_with_or_without_items() {
+    let f = Fixture::new();
+    let mut prepared = f.prepare(&f.root);
+    prepared.spec.path = "x".repeat(4096);
+    for entries in [
+        vec![],
+        vec![EntryItem {
+            path: "file".into(),
+            entry_type: EntryType::File,
+        }],
+    ] {
+        let inputs = [SectionInput {
+            section: AnalysisSection::Tree,
+            execution_id: None,
+            outcome: SectionOutcome::Fixed(entries),
+        }];
+        let mut doc = analyze::build(&prepared.spec, 1, &inputs);
+        assert_eq!(
+            analyze::encode(&mut doc, 1024).unwrap_err().code,
+            ErrorCode::OutputLimitTooSmall
+        );
+    }
+}
+
+#[test]
+fn parent_time_precedes_child_registration_even_across_a_second_boundary() {
+    let f = Fixture::new();
+    let prepared = f.prepare(&f.root.join("src/main.rs"));
+    let mut child_started = 0;
+    let (parent, error) = analyze::register(&f.store, &prepared, |child| {
+        child_started = results::now();
+        while results::now() == child_started {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Ok(f.record(&child.plan))
+    })
+    .unwrap();
+    assert_eq!(error, None);
+    assert!(parent.registered_at <= child_started);
+}

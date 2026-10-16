@@ -178,6 +178,7 @@ pub fn register(
     prepared: &PreparedAnalysis,
     mut register: impl FnMut(&Prepared) -> Result<ExecutionRecord, RegistrationFailure>,
 ) -> Result<(ParentRecord, Option<Error>), StartFailure> {
+    let registered_at = results::now();
     let execution_id = ExecutionStore::allocate_id().map_err(|error| StartFailure {
         error,
         registered: vec![],
@@ -227,7 +228,7 @@ pub fn register(
     }
     let record = ParentRecord {
         execution_id,
-        registered_at: results::now(),
+        registered_at,
         cwd: spec.root.clone(),
         children: children.clone(),
         analysis: Some(spec),
@@ -553,6 +554,18 @@ pub fn encode(doc: &mut AnalysisDocument, budget: u64) -> Result<(Vec<u8>, Vec<V
         }
         doc.completeness = Completeness::new(reasons, doc.completeness.partial);
         header = encode_header(doc)?;
+    }
+    if header.len() as u64
+        + lines[..keep]
+            .iter()
+            .map(|line| line.len() as u64)
+            .sum::<u64>()
+        > budget
+    {
+        return Err(Error::new(
+            ErrorCode::OutputLimitTooSmall,
+            "analysis header exceeds the artifact reservation",
+        ));
     }
     Ok((header, lines.into_iter().take(keep).collect()))
 }
