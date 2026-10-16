@@ -291,18 +291,25 @@ fn code_tools_need_policy_and_the_right_build() {
         fs::write(bin.join(name), format!("#!/bin/sh\nprintf '{text}\\n'\n")).unwrap();
         fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
     };
-    for (name, text, args) in [
+    for (name, text, args, reason) in [
         (
             "tokei",
             "tokei 15.0.0 compiled with serialization support: cbor, yaml",
             vec!["code", "stats"],
+            "tokei 15.0.0 was built without JSON output support",
         ),
         (
             "tokei",
             "tokei 14.0.0 compiled with serialization support: json",
             vec!["code", "stats"],
+            "tokei version is not supported; supported: >=15.0.0",
         ),
-        ("ast-grep", "ast-grep 0.1.0", search.clone()),
+        (
+            "ast-grep",
+            "ast-grep 0.1.0",
+            search.clone(),
+            "ast-grep version is not supported; supported: >=0.51.0",
+        ),
     ] {
         fake(name, text);
         let (code, json) = cli(&dir, &allow, Some(&bin), &args);
@@ -310,6 +317,10 @@ fn code_tools_need_policy_and_the_right_build() {
             (code, &json["error"]["code"]),
             (16, &"unsupported_tool_capability".into()),
             "{text}"
+        );
+        assert!(
+            json["error"]["message"].as_str().unwrap().contains(reason),
+            "{json}"
         );
         assert_eq!(json["execution_id"], serde_json::Value::Null);
     }

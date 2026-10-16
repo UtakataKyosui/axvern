@@ -56,6 +56,8 @@ pub struct ToolSpec {
     pub tested_version: &'static str,
     /// Whether the `--version` output shows a build with every feature the adapter needs.
     pub capable: fn(&[u8]) -> bool,
+    /// What `capable` checks, for messages.
+    pub feature: &'static str,
 }
 fn any_build(_: &[u8]) -> bool {
     true
@@ -66,6 +68,7 @@ pub const FD: ToolSpec = ToolSpec {
     min_version: [10, 0, 0],
     tested_version: "10.5.0",
     capable: any_build,
+    feature: "",
 };
 pub const RG: ToolSpec = ToolSpec {
     name: "rg",
@@ -73,6 +76,7 @@ pub const RG: ToolSpec = ToolSpec {
     min_version: [14, 0, 0],
     tested_version: "15.2.0",
     capable: any_build,
+    feature: "",
 };
 pub const BAT: ToolSpec = ToolSpec {
     name: "bat",
@@ -80,6 +84,7 @@ pub const BAT: ToolSpec = ToolSpec {
     min_version: [0, 24, 0],
     tested_version: "0.26.1",
     capable: any_build,
+    feature: "",
 };
 pub const AST_GREP: ToolSpec = ToolSpec {
     name: "ast-grep",
@@ -87,6 +92,7 @@ pub const AST_GREP: ToolSpec = ToolSpec {
     min_version: [0, 51, 0],
     tested_version: "0.51.0",
     capable: any_build,
+    feature: "",
 };
 pub const TOKEI: ToolSpec = ToolSpec {
     name: "tokei",
@@ -94,6 +100,7 @@ pub const TOKEI: ToolSpec = ToolSpec {
     min_version: [15, 0, 0],
     tested_version: "15.0.0",
     capable: tokei::has_json,
+    feature: "JSON output support",
 };
 impl ToolSpec {
     pub fn supported_range(&self) -> String {
@@ -108,6 +115,8 @@ pub enum ToolStatus {
     /// The probe timed out or could not run.
     Unknown,
     Unsupported(String),
+    /// The version is supported but this build lacks `ToolSpec::feature`.
+    LacksFeature(String),
     Supported(String),
 }
 /// First `x.y.z` token of a `--version` output.
@@ -135,7 +144,7 @@ pub fn classify_version(spec: &ToolSpec, version: &str) -> ToolStatus {
 pub fn detect(spec: &ToolSpec, timeout: Duration) -> ToolStatus {
     match probe(Command::new(spec.name).arg("--version"), timeout) {
         Ok((true, bytes)) => match version_token(&bytes) {
-            Some(version) if !(spec.capable)(&bytes) => ToolStatus::Unsupported(version),
+            Some(version) if !(spec.capable)(&bytes) => ToolStatus::LacksFeature(version),
             Some(version) => classify_version(spec, &version),
             None => ToolStatus::Unsupported("unknown".into()),
         },
@@ -273,10 +282,14 @@ pub(crate) fn require_supported(spec: &ToolSpec) -> Result<(), Error> {
             ErrorCode::MissingTool,
             format!("{} is not installed", spec.name),
         )),
+        ToolStatus::LacksFeature(version) => Err(Error::new(
+            ErrorCode::UnsupportedToolCapability,
+            format!("{} {version} was built without {}", spec.name, spec.feature),
+        )),
         ToolStatus::Unsupported(_) => Err(Error::new(
             ErrorCode::UnsupportedToolCapability,
             format!(
-                "{} lacks a required capability; supported: {}",
+                "{} version is not supported; supported: {}",
                 spec.name,
                 spec.supported_range()
             ),

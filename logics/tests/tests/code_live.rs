@@ -365,3 +365,32 @@ fn doctor_reports_ast_grep_and_tokei_with_versions() {
         assert!(check["tool"]["version"].as_str().is_some());
     }
 }
+
+#[test]
+fn human_output_lists_matches_and_language_rows() {
+    live!();
+    let q = Queue::new();
+    repo(&q._temp.path().join("repo"));
+    let config = config(&q, "");
+    let text = |args: &[&str]| {
+        let mut argv = vec!["--format", "human"];
+        argv.extend(args);
+        argv.extend(["--wait", "30s"]);
+        let out = public_cli(&q, &config, &argv);
+        assert_eq!(out.status.code(), Some(0));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let found = text(&[
+        "code",
+        "search",
+        "--pattern",
+        "fn other() { $$$B }",
+        "--lang",
+        "rust",
+        "repo/src",
+    ]);
+    assert!(found.contains("a.rs:2:fn other() { 1 }"), "{found}");
+    assert!(!found.contains('\u{1b}'));
+    let stats = text(&["code", "stats", "repo/src/a.rs"]);
+    assert!(stats.contains("Rust\t1\t"), "{stats}");
+}

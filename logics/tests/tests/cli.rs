@@ -372,11 +372,14 @@ fn doctor_tool_and_store_failures_are_structured() {
     assert_eq!(no_json["tool"]["installed"], true);
     assert_eq!(no_json["tool"]["version"], "15.0.0");
     assert_eq!(no_json["tool"]["feature_available"], false);
+    assert!(no_json["message"].as_str().unwrap().contains(
+        "unsupported tool capability: tokei 15.0.0 was built without JSON output support"
+    ));
     assert!(
-        no_json["message"]
+        no_json["remedy"]
             .as_str()
             .unwrap()
-            .contains("unsupported tool capability")
+            .contains("build with JSON output support")
     );
     std::fs::write(
         bin.join("tokei"),
