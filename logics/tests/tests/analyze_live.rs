@@ -1,6 +1,7 @@
 //! Real fd/tokei children of `fs analyze` through an isolated Pueue daemon and the public CLI.
 //! Skipped (with a message) when pueue, fd or tokei is not installed.
 mod common;
+use axvern_models::ChildState;
 use common::*;
 use serde_json::Value;
 use std::{
@@ -198,6 +199,50 @@ fn a_directory_is_analyzed_by_three_children_and_reread_without_them() {
     let cleaned = cli_json(&q, &config, &["result", &id], 0);
     assert_eq!(cleaned["output"], first["output"]);
     assert_eq!(cli_json(&q, &config, &["wait", &id], 0)["state"], "done");
+}
+
+#[test]
+fn an_unwaited_start_is_pending_until_the_children_are_observed_finished() {
+    live!();
+    let q = Queue::new();
+    repo(q._temp.path());
+    let config = configure(&q, "");
+    let started = cli_json(&q, &config, &["fs", "analyze", "repo", "--wait", "0s"], 0);
+    assert_eq!(started["state"], Value::Null);
+    assert_eq!(started["output"]["result_availability"], "pending");
+    assert_eq!(started["output"]["result"], Value::Null);
+    let id = started["execution_id"].as_str().unwrap().to_owned();
+    let pending = &started["output"]["children"];
+    assert_eq!(pending.as_array().unwrap().len(), 3);
+    assert!(pending[0]["execution_id"].is_string());
+    // Let every child finish without observing the parent, then list it.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !q
+        .adapter
+        .list()
+        .unwrap()
+        .iter()
+        .all(|t| t.state == ChildState::Done)
+    {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let history = cli_json(&q, &config, &["history"], 0);
+    let parent = history["output"]["executions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["record"]["execution_id"] == id.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(parent["kind"], "fs.analyze");
+    assert_eq!(parent["task"]["state"], "done");
+    assert_eq!(parent["result_availability"], "available");
+    assert_eq!(parent["children"][0]["section"], "languages");
+    assert_eq!(cli_json(&q, &config, &["wait", &id], 0)["state"], "done");
+    let result = cli_json(&q, &config, &["result", &id], 0);
+    assert_eq!(result["output"]["result_availability"], "available");
+    assert_eq!(result["state"], "done");
 }
 
 #[test]

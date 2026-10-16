@@ -773,11 +773,22 @@ pub fn observe(
     }
     let mut adapter = service.adapter.clone();
     adapter.timeout = adapter.timeout.min(timeout);
-    let tasks = adapter.list();
+    observe_with_tasks(service, record, &adapter.list())
+}
+/// [`observe`] with a task list fetched once for several parents.
+pub fn observe_with_tasks(
+    service: &ExecutionService,
+    record: &ParentRecord,
+    tasks: &Result<Vec<TaskSnapshot>, Error>,
+) -> Result<ParentState, Error> {
+    let settings = service.result_settings();
+    if let Some(state) = stored(&service.store, settings, record)? {
+        return Ok(state);
+    }
     let mut states = HashMap::new();
     for id in &record.children {
         let child = service.store.find_record(id)?;
-        let state = match &tasks {
+        let state = match tasks {
             Ok(tasks) => tasks
                 .iter()
                 .find(|t| t.identity == child.backend)

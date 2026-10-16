@@ -763,18 +763,20 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                         let parent: ParentRecord =
                             serde_json::from_value(value["record"].clone()).expect("parent record");
                         if parent.analysis.is_some() {
-                            match analyze::stored(
-                                &service.store,
-                                service.result_settings(),
+                            let state = match analyze::observe_with_tasks(
+                                &service,
                                 &parent,
+                                tasks.as_ref().unwrap(),
                             ) {
-                                Ok(Some(state)) => {
-                                    *value = analysis_view(&parent, &state);
-                                    continue;
-                                }
-                                Ok(None) => (),
+                                Ok(state) => state,
                                 Err(e) => return failure(e),
-                            }
+                            };
+                            partial |= state
+                                .error
+                                .as_ref()
+                                .is_some_and(|e| e.code != ErrorCode::Expired);
+                            *value = analysis_view(&parent, &state);
+                            continue;
                         }
                         let view = match axvern_core::parents::inspect_with_tasks(
                             &service,
@@ -1327,9 +1329,11 @@ fn human(response: &Response<Value>) {
                     .map(ToString::to_string)
                     .unwrap_or_default()
             );
+            // A parent record has children instead of a backend task.
             if let Some(record) = output
                 .get("record")
                 .or_else(|| output.get("registration_receipt"))
+                .filter(|r| r.get("backend").is_some())
             {
                 println!("pueue_task_id: {}", record["backend"]["task_id"]);
             }
