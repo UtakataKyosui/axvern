@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s]";
+const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s]";
 struct Input {
     command: String,
     config: Option<PathBuf>,
@@ -35,9 +35,11 @@ struct Input {
     entry_type: Option<EntryFilter>,
     extensions: Vec<String>,
     globs: Vec<String>,
+    pattern: Option<String>,
+    lang: Option<String>,
 }
-/// Flags that only the fs commands accept, and which of them each command accepts.
-const FS_FLAGS: [&str; 11] = [
+/// Flags that only the discovery commands accept, and which of them each command accepts.
+const FS_FLAGS: [&str; 13] = [
     "--depth",
     "--include-ignored",
     "--glob",
@@ -49,6 +51,8 @@ const FS_FLAGS: [&str; 11] = [
     "--context",
     "--from-line",
     "--lines",
+    "--pattern",
+    "--lang",
 ];
 fn fs_flags(command: &str) -> &'static [&'static str] {
     match command {
@@ -70,6 +74,8 @@ fn fs_flags(command: &str) -> &'static [&'static str] {
             "--include-ignored",
         ],
         "fs read" => &["--from-line", "--lines"],
+        "code search" => &["--pattern", "--lang", "--include-ignored"],
+        "code stats" => &["--include-ignored"],
         _ => &[],
     }
 }
@@ -129,6 +135,8 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         entry_type: None,
         extensions: Vec::new(),
         globs: Vec::new(),
+        pattern: None,
+        lang: None,
     };
     let mut positional = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -205,6 +213,12 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
                 "--extension" if !value.is_empty() => input
                     .extensions
                     .push(value.to_str().ok_or_else(invalid)?.into()),
+                "--pattern" if !value.is_empty() => {
+                    input.pattern = Some(value.to_str().ok_or_else(invalid)?.into())
+                }
+                "--lang" if !value.is_empty() => {
+                    input.lang = Some(value.to_str().ok_or_else(invalid)?.into())
+                }
                 "--glob" if !value.is_empty() => {
                     input.globs.push(value.to_str().ok_or_else(invalid)?.into())
                 }
@@ -266,9 +280,22 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
             input.command = format!("fs {sub}");
             input.fs_args = words;
         }
+        ["code", sub @ ("search" | "stats"), rest @ ..] => {
+            let mut words: Vec<String> = rest.iter().map(|w| w.to_string()).collect();
+            for word in &input.target {
+                words.push(word.to_str().ok_or_else(invalid)?.to_owned());
+            }
+            if words.len() > 1
+                || (*sub == "search" && (input.pattern.is_none() || input.lang.is_none()))
+            {
+                return Err(invalid());
+            }
+            input.command = format!("code {sub}");
+            input.fs_args = words;
+        }
         _ => return Err(invalid()),
     }
-    let fs = input.command.starts_with("fs ");
+    let discovery = is_discovery(&input.command);
     if FS_FLAGS.iter().any(|flag| {
         (seen.contains(flag) || input.switches.contains(*flag))
             && !fs_flags(&input.command).contains(flag)
@@ -286,7 +313,7 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
     if (seen.contains("--cwd") && !matches!(input.command.as_str(), "run" | "policy check"))
         || (seen.contains("--timeout") && input.command != "wait")
         || (seen.contains("--scope") && input.command != "doctor")
-        || (seen.contains("--wait") && input.command != "run" && !fs)
+        || (seen.contains("--wait") && input.command != "run" && !discovery)
         || (seen.contains("--request-id") && input.command != "run")
         || (seen.contains("--limit") && !matches!(input.command.as_str(), "history" | "result"))
         || ((seen.contains("--cursor") || seen.contains("--max-bytes"))
@@ -295,6 +322,10 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         return Err(invalid());
     }
     Ok(input)
+}
+/// Commands that run an external tool in the background and store a [`DiscoveryDocument`].
+fn is_discovery(command: &str) -> bool {
+    command.starts_with("fs ") || command.starts_with("code ")
 }
 fn discovery_request(input: &Input) -> Result<DiscoveryRequest, Error> {
     let path = |i: usize| input.fs_args.get(i).map(PathBuf::from);
@@ -334,13 +365,25 @@ fn discovery_request(input: &Input) -> Result<DiscoveryRequest, Error> {
             from_line: input.from_line.unwrap_or(1),
             lines: input.lines.unwrap_or(DEFAULT_READ_LINES),
         },
+        "code search" => DiscoveryRequest::CodeSearch {
+            pattern: input.pattern.clone().ok_or_else(invalid)?,
+            lang: input.lang.clone().ok_or_else(invalid)?,
+            path: path(0),
+            include_ignored: switch("--include-ignored"),
+        },
+        "code stats" => DiscoveryRequest::CodeStats {
+            path: path(0),
+            include_ignored: switch("--include-ignored"),
+        },
         _ => return Err(invalid()),
     })
 }
 fn error_exit(error: &Error) -> i32 {
     match error.code {
         ErrorCode::RequestConflict => 15,
-        ErrorCode::UnsupportedCapability => 16,
+        ErrorCode::UnsupportedCapability
+        | ErrorCode::UnsupportedLanguage
+        | ErrorCode::UnsupportedToolCapability => 16,
         ErrorCode::InvalidInput
         | ErrorCode::InvalidPattern
         | ErrorCode::InvalidTarget
@@ -356,6 +399,7 @@ fn error_exit(error: &Error) -> i32 {
         ErrorCode::Expired => 8,
         ErrorCode::PolicyDenied => 9,
         ErrorCode::PartialResult
+        | ErrorCode::ParseError
         | ErrorCode::OutputMissing
         | ErrorCode::ResultExpired
         | ErrorCode::ResultEvicted
@@ -520,7 +564,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
     let interactive = io::stdin().is_terminal() && io::stderr().is_terminal();
     let mut approval = Approval::NotProvided;
     let mut job = None;
-    let run_plan = if input.command == "run" || input.command.starts_with("fs ") {
+    let run_plan = if input.command == "run" || is_discovery(&input.command) {
         let p = if input.command == "run" {
             match plan(input) {
                 Ok(p) => p,
@@ -553,7 +597,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
             return failure(e);
         }
         if job.is_some()
-            && let Err(e) = discovery::ensure_tool(&p)
+            && let Err(e) = discovery::ensure_tool(job.as_ref().expect("discovery job"), &p)
         {
             return failure(e);
         }
@@ -574,7 +618,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
         }
     }
     match input.command.as_str() {
-        "run" | "fs list" | "fs find" | "fs search" | "fs read" => {
+        "run" | "fs list" | "fs find" | "fs search" | "fs read" | "code search" | "code stats" => {
             let p = run_plan.as_ref().expect("run plan");
             match std::env::current_exe()
                 .map_err(|_| axvern_core::store::RegistrationFailure {
@@ -1077,6 +1121,28 @@ fn human(response: &Response<Value>) {
     if let Some(result) = response.output.as_ref().and_then(|o| o.get("result")) {
         if let Some(items) = result["items"].as_array() {
             for item in items {
+                if let Some(language) = item["language"].as_str() {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        visible(language),
+                        item["files"],
+                        item["code"],
+                        item["comments"],
+                        item["blanks"]
+                    );
+                    continue;
+                }
+                if let (Some(path), Some(snippet)) =
+                    (item["path"].as_str(), item["snippet"].as_str())
+                {
+                    println!(
+                        "{}:{}:{}",
+                        visible(path),
+                        item["start"]["line"],
+                        visible(snippet.lines().next().unwrap_or(""))
+                    );
+                    continue;
+                }
                 let text = item["text"].as_str().map(visible);
                 let path = item["path"].as_str().map(visible);
                 match (item["type"].as_str(), path, item["line"].as_u64(), text) {
@@ -1157,10 +1223,13 @@ fn main() {
         let words: Vec<_> = args[..boundary].iter().filter_map(|a| a.to_str()).collect();
         response.command = words
             .iter()
-            .position(|a| *a == "fs")
-            .and_then(|i| words.get(i + 1))
-            .filter(|sub| matches!(**sub, "list" | "find" | "search" | "read"))
-            .map(|sub| format!("fs {sub}"));
+            .position(|a| matches!(*a, "fs" | "code"))
+            .and_then(|i| Some((words[i], words.get(i + 1)?)))
+            .filter(|(group, sub)| match *group {
+                "fs" => matches!(**sub, "list" | "find" | "search" | "read"),
+                _ => matches!(**sub, "search" | "stats"),
+            })
+            .map(|(group, sub)| format!("{group} {sub}"));
     }
     if response.command.is_none() {
         response.command = args[..boundary]
@@ -1183,7 +1252,7 @@ fn main() {
     if response
         .command
         .as_deref()
-        .is_some_and(|c| c == "run" || c.starts_with("fs "))
+        .is_some_and(|c| c == "run" || is_discovery(c))
         && serde_json::to_vec(&response).is_ok_and(|v| v.len() >= 65536)
         && let Some(output) = response.output.as_mut().and_then(Value::as_object_mut)
     {

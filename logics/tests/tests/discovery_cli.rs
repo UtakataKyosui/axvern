@@ -169,14 +169,148 @@ fn policy_refuses_unlisted_tools_and_a_missing_tool_is_reported() {
 }
 
 #[test]
-fn help_lists_the_fs_commands() {
+fn help_lists_the_discovery_commands() {
     let out =
         Command::new(std::env::var_os("AXVERN_TEST_BIN").expect("use moon run qualities:test"))
             .arg("--help")
             .output()
             .unwrap();
     let text = String::from_utf8(out.stdout).unwrap();
-    for command in ["fs list", "fs find", "fs search", "fs read"] {
+    for command in [
+        "fs list",
+        "fs find",
+        "fs search",
+        "fs read",
+        "code search",
+        "code stats",
+    ] {
         assert!(text.contains(command), "{command}");
+    }
+}
+
+#[test]
+fn code_input_is_checked_before_registration() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
+    fs::write(dir.join("a.py"), "x = 1\n").unwrap();
+    let config = config(&dir, "");
+    let search = ["code", "search", "--pattern", "x", "--lang", "rust"];
+    for (args, code, error) in [
+        (vec!["code", "search", "--lang", "rust"], 2, "invalid_input"),
+        (vec!["code", "search", "--pattern", "x"], 2, "invalid_input"),
+        (
+            vec!["code", "search", "--pattern", "", "--lang", "rust"],
+            2,
+            "invalid_input",
+        ),
+        (
+            vec!["code", "search", "--pattern", "x", "--lang", ""],
+            2,
+            "invalid_input",
+        ),
+        (
+            vec!["code", "search", "--pattern", "x", "--lang", "cobol"],
+            16,
+            "unsupported_language",
+        ),
+        (
+            vec!["code", "search", "--pattern", "x", "--lang", "Rust"],
+            16,
+            "unsupported_language",
+        ),
+        ([&search[..], &["a.py"]].concat(), 2, "invalid_input"),
+        ([&search[..], &["gone"]].concat(), 2, "target_not_found"),
+        ([&search[..], &["a", "b"]].concat(), 2, "invalid_input"),
+        (
+            [&search[..], &["--pattern", "y"]].concat(),
+            2,
+            "invalid_input",
+        ),
+        (
+            [&search[..], &["--rewrite", "y"]].concat(),
+            2,
+            "invalid_input",
+        ),
+        (vec!["code", "stats", "a", "b"], 2, "invalid_input"),
+        (vec!["code", "stats", "--lang", "rust"], 2, "invalid_input"),
+        (vec!["code", "stats", "--pattern", "x"], 2, "invalid_input"),
+        (vec!["code", "stats", "gone"], 2, "target_not_found"),
+        (vec!["code", "stats", "--depth", "1"], 2, "invalid_input"),
+    ] {
+        let (exit, json) = cli(&dir, &config, None, &args);
+        assert_eq!(
+            (exit, &json["error"]["code"]),
+            (code, &error.into()),
+            "{args:?}"
+        );
+        assert_eq!(json["execution_id"], serde_json::Value::Null);
+        assert_eq!(json["command"], format!("code {}", args[1]), "{args:?}");
+    }
+    for args in [
+        vec!["code", "frobnicate"],
+        vec!["fs", "list", "--lang", "rust"],
+        vec!["fs", "search", "x", "--pattern", "y"],
+    ] {
+        let (exit, json) = cli(&dir, &config, None, &args);
+        assert_eq!((exit, &json["error"]["code"]), (2, &"invalid_input".into()));
+    }
+}
+
+#[test]
+fn code_tools_need_policy_and_the_right_build() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
+    let ask = config(&dir, "");
+    let search = vec!["code", "search", "--pattern", "x", "--lang", "rust"];
+    for args in [search.clone(), vec!["code", "stats"]] {
+        let (code, json) = cli(&dir, &ask, None, &args);
+        assert_eq!(
+            (code, &json["error"]["code"]),
+            (9, &"policy_denied".into()),
+            "{args:?}"
+        );
+    }
+    let allow = config(
+        &dir,
+        "[[policy.rules]]\nid='a'\neffect='allow'\ncommand='ast-grep'\n[[policy.rules]]\nid='b'\neffect='allow'\ncommand='tokei'\n",
+    );
+    let bin = dir.join("bin");
+    fs::create_dir(&bin).unwrap();
+    for args in [search.clone(), vec!["code", "stats"]] {
+        let (code, json) = cli(&dir, &allow, Some(&bin), &args);
+        assert_eq!(
+            (code, &json["error"]["code"]),
+            (5, &"missing_tool".into()),
+            "{args:?}"
+        );
+    }
+    // A tool this adapter was not verified against is refused before any task is registered.
+    let fake = |name: &str, text: &str| {
+        fs::write(bin.join(name), format!("#!/bin/sh\nprintf '{text}\\n'\n")).unwrap();
+        fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    for (name, text, args) in [
+        (
+            "tokei",
+            "tokei 15.0.0 compiled with serialization support: cbor, yaml",
+            vec!["code", "stats"],
+        ),
+        (
+            "tokei",
+            "tokei 14.0.0 compiled with serialization support: json",
+            vec!["code", "stats"],
+        ),
+        ("ast-grep", "ast-grep 0.1.0", search.clone()),
+    ] {
+        fake(name, text);
+        let (code, json) = cli(&dir, &allow, Some(&bin), &args);
+        assert_eq!(
+            (code, &json["error"]["code"]),
+            (16, &"unsupported_tool_capability".into()),
+            "{text}"
+        );
+        assert_eq!(json["execution_id"], serde_json::Value::Null);
     }
 }

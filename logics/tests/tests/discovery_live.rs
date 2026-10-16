@@ -697,11 +697,13 @@ fn doctor_reports_adapter_tools_with_versions() {
     live!();
     let q = Queue::new();
     let config = config(&q, "");
+    // Doctor fails only for a missing required tool; ast-grep and tokei are required too.
+    let code_tools = installed("ast-grep") && installed("tokei");
     let report = cli_json(
         &q,
         &config,
         &["doctor", "--scope", "discovery"],
-        12, // ast-grep and tokei adapters are not part of this release
+        if code_tools { 0 } else { 12 },
     );
     let checks = report["output"]["checks"].as_array().unwrap();
     for name in ["fd", "rg", "bat"] {
