@@ -149,6 +149,35 @@ fn search_finds_positions_and_distrusts_files_that_do_not_parse() {
 }
 
 #[test]
+fn search_counts_nonmatching_files_in_every_supported_language() {
+    live!();
+    let q = Queue::new();
+    let config = config(&q, "[discovery]\nmax_items=1\nmax_entries=1\n");
+    for (lang, extension, source, pattern) in [
+        ("rust", "rs", "fn other() {}\n", "fn target() {}"),
+        ("javascript", "js", "other();\n", "target()"),
+        ("typescript", "ts", "other();\n", "target()"),
+        ("python", "py", "other()\n", "target()"),
+        ("go", "go", "package main\nfunc other() {}\n", "target()"),
+    ] {
+        for i in 0..3 {
+            write(q._temp.path(), &format!("{lang}/{i}.{extension}"), source);
+        }
+        let result = start(
+            &q,
+            &config,
+            &["code", "search", "--pattern", pattern, "--lang", lang, lang],
+        );
+        assert!(items(&result).is_empty(), "{lang}: {result}");
+        assert_eq!(
+            result["output"]["result"]["completeness"]["truncation_reasons"],
+            serde_json::json!(["max_entries"]),
+            "{lang}: {result}"
+        );
+    }
+}
+
+#[test]
 fn search_distinguishes_zero_matches_bad_patterns_and_bad_input() {
     live!();
     let q = Queue::new();

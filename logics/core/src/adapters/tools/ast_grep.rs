@@ -1,5 +1,6 @@
 //! `ast-grep scan --inline-rules` backs `code search`: a `pattern` rule yields the matches and
-//! a `kind: ERROR` rule marks files that did not parse, so one run reports both. The rules are
+//! a `kind: ERROR` rule marks files that did not parse. A root rule also reports files with
+//! no matches, so max_entries counts scanned files. The rules are
 //! built with `serde_json` only; a pattern can never add a field or a second rule.
 use super::*;
 use serde_json::{Value, json};
@@ -11,6 +12,7 @@ use std::{
 
 const MATCH_RULE: &str = "axvern-match";
 const ERROR_RULE: &str = "axvern-parse-error";
+const FILE_RULE: &str = "axvern-file";
 /// `ast-grep` exit status for a rule that cannot be loaded, which here means the pattern.
 const EXIT_INVALID_RULE: i32 = 8;
 
@@ -57,11 +59,17 @@ impl Language {
 
 pub struct AstGrep(pub CodeSearchJob);
 impl AstGrep {
-    /// Two YAML documents, each written as a JSON object.
+    /// YAML documents, each written as a JSON object.
     fn rules(&self) -> String {
+        let root_kind = match self.0.lang.as_str() {
+            "javascript" | "typescript" => "program",
+            "python" => "module",
+            _ => "source_file",
+        };
         [
             json!({"id": MATCH_RULE, "language": self.0.lang, "rule": {"pattern": self.0.pattern}}),
             json!({"id": ERROR_RULE, "language": self.0.lang, "rule": {"kind": "ERROR"}}),
+            json!({"id": FILE_RULE, "language": self.0.lang, "rule": {"kind": root_kind}}),
         ]
         .map(|rule| rule.to_string())
         .join("\n---\n")

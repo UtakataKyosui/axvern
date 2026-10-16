@@ -101,11 +101,13 @@ fn search_plan_is_plain_argv_and_the_pattern_cannot_add_a_rule() {
         .split("\n---\n")
         .map(|d| serde_json::from_str(d).unwrap())
         .collect();
-    assert_eq!(documents.len(), 2);
+    assert_eq!(documents.len(), 3);
     assert_eq!(documents[0]["id"], "axvern-match");
     assert_eq!(documents[0]["rule"], json!({"pattern": hostile}));
     assert_eq!(documents[0].as_object().unwrap().len(), 3);
     assert_eq!(documents[1]["rule"], json!({"kind": "ERROR"}));
+    assert_eq!(documents[2]["id"], "axvern-file");
+    assert_eq!(documents[2]["rule"], json!({"kind": "source_file"}));
     for flag in [
         "--json=stream",
         "--color",
@@ -337,6 +339,56 @@ fn supported_languages_and_extensions_are_checked() {
     assert!(!rust.owns("rs"));
     assert!(ast_grep::language("typescript").unwrap().owns("a.mts"));
     assert!(!ast_grep::language("typescript").unwrap().owns("a.tsx"));
+}
+
+#[test]
+fn files_without_matches_count_toward_the_entry_limit() {
+    let DiscoveryJob::CodeSearch(mut job) = search_job("x", 10) else {
+        unreachable!()
+    };
+    job.limits.max_entries = 1;
+    let stream = b"{\"ruleId\":\"axvern-file\",\"file\":\"a.rs\"}\n{\"ruleId\":\"axvern-file\",\"file\":\"b.rs\"}\n";
+    let outcome = run(&DiscoveryJob::CodeSearch(job), &[stream], ok(0), b"");
+    assert!(outcome.document.items.is_empty());
+    assert_eq!(
+        outcome.document.completeness.truncation_reasons,
+        [TruncationReason::MaxEntries]
+    );
+    assert!(!outcome.document.completeness.scope_complete);
+}
+
+#[test]
+fn language_items_are_sorted_then_limited_without_changing_scan_totals() {
+    let stream = fixture("tokei-stream.jsonl");
+    let DiscoveryJob::CodeStats(mut job) = stats_job(100) else {
+        unreachable!()
+    };
+    job.limits.max_items = 1;
+    let limited = run(
+        &DiscoveryJob::CodeStats(job.clone()),
+        &[&stream],
+        ok(0),
+        b"",
+    );
+    assert_eq!(stat_items(&limited).len(), 1);
+    assert_eq!(stat_items(&limited)[0].language, "HTML");
+    assert_eq!(
+        limited.document.completeness.truncation_reasons,
+        [TruncationReason::MaxItems]
+    );
+    assert!(matches!(
+        limited.document.summary,
+        DiscoverySummary::CodeStats {
+            files: 3,
+            code: 8,
+            scope_complete: false,
+            ..
+        }
+    ));
+    job.limits.max_items = 2;
+    let exact = run(&DiscoveryJob::CodeStats(job), &[&stream], ok(0), b"");
+    assert_eq!(stat_items(&exact).len(), 2);
+    assert!(exact.document.completeness.scope_complete);
 }
 
 #[test]

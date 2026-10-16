@@ -319,6 +319,13 @@ impl Normalizer for TokeiNormalizer {
             );
         }
         let (files, code, comments, blanks) = self.tally.totals();
+        let mut items = self.tally.items();
+        if items.len() as u64 > self.job.limits.max_items {
+            items.truncate(self.job.limits.max_items as usize);
+            if !reasons.contains(&TruncationReason::MaxItems) {
+                reasons.push(TruncationReason::MaxItems);
+            }
+        }
         let completeness = Completeness::new(reasons, !self.issues.errors.is_empty());
         DiscoveryOutcome {
             state,
@@ -333,12 +340,7 @@ impl Normalizer for TokeiNormalizer {
                     scope_complete: completeness.scope_complete,
                     skipped_files: None,
                 },
-                items: self
-                    .tally
-                    .items()
-                    .into_iter()
-                    .map(DiscoveryItem::Stat)
-                    .collect(),
+                items: items.into_iter().map(DiscoveryItem::Stat).collect(),
                 completeness,
                 errors: self.issues.errors,
                 warnings: self.issues.warnings,
