@@ -371,5 +371,97 @@
     ],
     "expected_exit": 2,
     "expected_error": "invalid_input"
+  },
+  {
+    "name": "code-search-ask",
+    "args": [
+      "code",
+      "search",
+      "--pattern",
+      "fn $F() {}",
+      "--lang",
+      "rust"
+    ],
+    "expected_exit": 9,
+    "expected_error": "policy_denied"
+  },
+  {
+    "name": "code-search-no-lang",
+    "args": [
+      "code",
+      "search",
+      "--pattern",
+      "x"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "code-search-no-pattern",
+    "args": [
+      "code",
+      "search",
+      "--lang",
+      "rust"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "code-search-unsupported-lang",
+    "args": [
+      "code",
+      "search",
+      "--pattern",
+      "x",
+      "--lang",
+      "cobol"
+    ],
+    "expected_exit": 16,
+    "expected_error": "unsupported_language"
+  },
+  {
+    "name": "code-search-missing-path",
+    "args": [
+      "code",
+      "search",
+      "--pattern",
+      "x",
+      "--lang",
+      "rust",
+      "no-such-directory"
+    ],
+    "expected_exit": 2,
+    "expected_error": "target_not_found"
+  },
+  {
+    "name": "code-stats-ask",
+    "args": [
+      "code",
+      "stats"
+    ],
+    "expected_exit": 9,
+    "expected_error": "policy_denied"
+  },
+  {
+    "name": "code-stats-missing",
+    "args": [
+      "code",
+      "stats",
+      "no-such-directory"
+    ],
+    "expected_exit": 2,
+    "expected_error": "target_not_found"
+  },
+  {
+    "name": "code-stats-unknown-flag",
+    "args": [
+      "code",
+      "stats",
+      "--lang",
+      "rust"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
   }
 ]

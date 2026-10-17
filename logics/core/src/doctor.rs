@@ -66,6 +66,15 @@ fn adapter_tool(spec: &ToolSpec, deadline: Instant) -> Diagnostic {
             CheckLevel::Pass,
             "available".to_owned(),
         ),
+        ToolStatus::LacksFeature(v) => (
+            Some(true),
+            Some(v.clone()),
+            CheckLevel::Fail,
+            format!(
+                "unsupported tool capability: {} {v} was built without {}",
+                spec.name, spec.feature
+            ),
+        ),
         ToolStatus::Unsupported(v) => (
             Some(true),
             Some(v.clone()),
@@ -92,12 +101,16 @@ fn adapter_tool(spec: &ToolSpec, deadline: Instant) -> Diagnostic {
         name: spec.name.into(),
         level,
         message,
-        remedy: (level != CheckLevel::Pass).then(|| {
-            format!(
+        remedy: (level != CheckLevel::Pass).then(|| match &status {
+            ToolStatus::LacksFeature(_) => format!(
+                "install a {} build with {} and put it on PATH",
+                spec.name, spec.feature
+            ),
+            _ => format!(
                 "install {} {} and put it on PATH",
                 spec.name,
                 spec.supported_range()
-            )
+            ),
         }),
         tool: Some(ToolDiagnostic {
             installed,
@@ -296,7 +309,13 @@ pub fn diagnose_scope_with_timeout(
         }
     }
     if matches!(scope, "discovery" | "all") {
-        for spec in [&tools::FD, &tools::RG, &tools::BAT] {
+        for spec in [
+            &tools::FD,
+            &tools::RG,
+            &tools::BAT,
+            &tools::AST_GREP,
+            &tools::TOKEI,
+        ] {
             checks.push(adapter_tool(spec, deadline));
         }
         checks.push(future_tool(
@@ -305,12 +324,6 @@ pub fn diagnose_scope_with_timeout(
             false,
             deadline,
         ));
-        for (tool, purpose) in [
-            ("ast-grep", "structural code search"),
-            ("tokei", "language statistics"),
-        ] {
-            checks.push(future_tool(tool, purpose, true, deadline));
-        }
     }
     if matches!(scope, "performance" | "all") {
         checks.push(future_tool(

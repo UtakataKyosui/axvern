@@ -3,10 +3,12 @@
 //! An adapter never builds a shell string: it returns an [`ExecutionPlan`] whose argv is
 //! handed to the Policy and Pueue path unchanged. The [`Normalizer`] turns the target's
 //! stdout into the stored [`DiscoveryDocument`]; it runs inside the background worker, so
-//! reading a stored result never invokes the tool again. New tools (for example `tokei`
-//! or `ast-grep`) add a [`DiscoveryJob`] variant, a [`ToolSpec`] and a [`DiscoveryAdapter`].
+//! reading a stored result never invokes the tool again. A new tool adds a [`DiscoveryJob`]
+//! variant, a [`ToolSpec`], a [`DiscoveryAdapter`], validation in `discovery::prepare` and a
+//! branch in [`adapter`]; storage, paging and `result` are shared.
 //!
-//! Spike facts the adapters rely on (macOS, fd 10.5.0, ripgrep 15.2.0, bat 0.26.1):
+//! Spike facts the adapters rely on (macOS, fd 10.5.0, ripgrep 15.2.0, bat 0.26.1,
+//! ast-grep 0.51.0, tokei 15.0.0):
 //! - `fd` exits 0 on unreadable directories and only reports them with `--show-errors`;
 //!   it cannot disable `.git/info/exclude`, `.ignore` or `.fdignore`; `--full-path` matches
 //!   the absolute path, so root-relative full-path matching is done by the normalizer.
@@ -14,6 +16,20 @@
 //! - `bat` passes file bytes through unchanged (BOM, CRLF, escapes) and succeeds past EOF.
 //! - `eza` escapes names lossily (a literal backslash is not escaped) and cannot skip
 //!   descending into `.git`, so it is not used to produce structured entries.
+//! - `ast-grep scan` exits 0 whether or not anything matched or could be read; unreadable
+//!   paths appear only as `ERROR: <path>: <reason>` on stderr and a rejected rule exits 8.
+//!   `ast-grep run` accepts a malformed pattern and matches its error node, so `scan` with
+//!   `--inline-rules` is used; `--config /dev/null` keeps a project's `sgconfig.yml`
+//!   (`languageGlobs`) from changing which files belong to a language. Columns and lines are
+//!   0-based character counts. A `kind: ERROR` rule reports unparsable files; a missing
+//!   token (`let x = 1` without `;`) and some Python errors are not reported as errors.
+//! - `tokei --streaming json` prints one record per file (unordered) and exits 0 even when
+//!   a path cannot be read; those errors are on stderr. Per-language counts exclude embedded
+//!   languages (an 8-line HTML file with 4 script lines is HTML 4 + JavaScript 4); tokei's own
+//!   `Total` adds both. Unknown-language and binary files are dropped without a report.
+//! - Neither ast-grep nor tokei applies `.gitignore` outside a Git worktree. tokei cannot skip
+//!   `.git/info/exclude` or global ignore files (it only has `--no-ignore-parent`,
+//!   `--no-ignore-dot` and `--no-ignore`); ast-grep can (`--no-ignore exclude|global`).
 use crate::adapters::pueue::probe;
 use axvern_models::*;
 use std::{
@@ -23,9 +39,11 @@ use std::{
     time::Duration,
 };
 
+pub mod ast_grep;
 pub mod bat;
 pub mod fd;
 pub mod rg;
+pub mod tokei;
 
 /// Detection contract consumed by `doctor`.
 #[derive(Clone, Copy, Debug)]
@@ -36,24 +54,53 @@ pub struct ToolSpec {
     pub min_version: [u32; 3],
     /// Release the adapter's fixtures were recorded with.
     pub tested_version: &'static str,
+    /// Whether the `--version` output shows a build with every feature the adapter needs.
+    pub capable: fn(&[u8]) -> bool,
+    /// What `capable` checks, for messages.
+    pub feature: &'static str,
+}
+fn any_build(_: &[u8]) -> bool {
+    true
 }
 pub const FD: ToolSpec = ToolSpec {
     name: "fd",
     purpose: "file discovery",
     min_version: [10, 0, 0],
     tested_version: "10.5.0",
+    capable: any_build,
+    feature: "",
 };
 pub const RG: ToolSpec = ToolSpec {
     name: "rg",
     purpose: "text search",
     min_version: [14, 0, 0],
     tested_version: "15.2.0",
+    capable: any_build,
+    feature: "",
 };
 pub const BAT: ToolSpec = ToolSpec {
     name: "bat",
     purpose: "file rendering",
     min_version: [0, 24, 0],
     tested_version: "0.26.1",
+    capable: any_build,
+    feature: "",
+};
+pub const AST_GREP: ToolSpec = ToolSpec {
+    name: "ast-grep",
+    purpose: "structural code search",
+    min_version: [0, 51, 0],
+    tested_version: "0.51.0",
+    capable: any_build,
+    feature: "",
+};
+pub const TOKEI: ToolSpec = ToolSpec {
+    name: "tokei",
+    purpose: "language statistics",
+    min_version: [15, 0, 0],
+    tested_version: "15.0.0",
+    capable: tokei::has_json,
+    feature: "JSON output support",
 };
 impl ToolSpec {
     pub fn supported_range(&self) -> String {
@@ -68,6 +115,8 @@ pub enum ToolStatus {
     /// The probe timed out or could not run.
     Unknown,
     Unsupported(String),
+    /// The version is supported but this build lacks `ToolSpec::feature`.
+    LacksFeature(String),
     Supported(String),
 }
 /// First `x.y.z` token of a `--version` output.
@@ -95,6 +144,7 @@ pub fn classify_version(spec: &ToolSpec, version: &str) -> ToolStatus {
 pub fn detect(spec: &ToolSpec, timeout: Duration) -> ToolStatus {
     match probe(Command::new(spec.name).arg("--version"), timeout) {
         Ok((true, bytes)) => match version_token(&bytes) {
+            Some(version) if !(spec.capable)(&bytes) => ToolStatus::LacksFeature(version),
             Some(version) => classify_version(spec, &version),
             None => ToolStatus::Unsupported("unknown".into()),
         },
@@ -150,6 +200,10 @@ pub trait DiscoveryAdapter {
     fn plan(&self) -> Result<ExecutionPlan, Error>;
     /// `byte_budget` bounds the serialized size of the stored items.
     fn normalizer(&self, byte_budget: u64) -> Result<Box<dyn Normalizer>, Error>;
+    /// Checked before registration, after the program was found on `PATH`.
+    fn preflight(&self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 pub fn adapter(job: &DiscoveryJob) -> Box<dyn DiscoveryAdapter> {
     match job {
@@ -157,6 +211,8 @@ pub fn adapter(job: &DiscoveryJob) -> Box<dyn DiscoveryAdapter> {
         DiscoveryJob::Find(j) => Box::new(fd::Fd::find(j.clone())),
         DiscoveryJob::Search(j) => Box::new(rg::Rg(j.clone())),
         DiscoveryJob::Read(j) => Box::new(bat::Bat(j.clone())),
+        DiscoveryJob::CodeSearch(j) => Box::new(ast_grep::AstGrep(j.clone())),
+        DiscoveryJob::CodeStats(j) => Box::new(tokei::Tokei(j.clone())),
     }
 }
 
@@ -217,6 +273,28 @@ pub(crate) fn classify_io_message(message: &str) -> ErrorCode {
         ErrorCode::TargetNotFound
     } else {
         ErrorCode::BackendFailure
+    }
+}
+/// Rejects a tool this adapter was not verified against, before anything is registered.
+pub(crate) fn require_supported(spec: &ToolSpec) -> Result<(), Error> {
+    match detect(spec, Duration::from_secs(10)) {
+        ToolStatus::Missing => Err(Error::new(
+            ErrorCode::MissingTool,
+            format!("{} is not installed", spec.name),
+        )),
+        ToolStatus::LacksFeature(version) => Err(Error::new(
+            ErrorCode::UnsupportedToolCapability,
+            format!("{} {version} was built without {}", spec.name, spec.feature),
+        )),
+        ToolStatus::Unsupported(_) => Err(Error::new(
+            ErrorCode::UnsupportedToolCapability,
+            format!(
+                "{} version is not supported; supported: {}",
+                spec.name,
+                spec.supported_range()
+            ),
+        )),
+        ToolStatus::Supported(_) | ToolStatus::Unknown => Ok(()),
     }
 }
 pub(crate) fn missing_tool(spec: &ToolSpec) -> ResultIssue {

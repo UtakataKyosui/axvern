@@ -1,0 +1,3 @@
+{"language":"HTML","stats":{"name":"./page.html","stats":{"blanks":0,"blobs":{"JavaScript":{"blanks":0,"blobs":{},"code":2,"comments":1}},"code":4,"comments":0}}}
+{"language":"Rust","stats":{"name":"./a.rs","stats":{"blanks":1,"blobs":{},"code":3,"comments":1}}}
+{"language":"Rust","stats":{"name":"./b.rs","stats":{"blanks":0,"blobs":{},"code":1,"comments":0}}}

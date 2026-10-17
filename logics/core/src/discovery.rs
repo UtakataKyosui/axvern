@@ -2,7 +2,8 @@
 //! run the registered job in the background worker and store its normalized result.
 use crate::{
     adapters::tools::{
-        self, Flow, Normalizer, Stop, TargetExit, ToolSpec, fd::PathFilter, rg::GlobFilter,
+        self, Flow, Normalizer, Stop, TargetExit, ToolSpec, ast_grep, fd::PathFilter,
+        rg::GlobFilter,
     },
     config::Results,
     results,
@@ -76,6 +77,28 @@ fn directory(path: Option<&Path>, cwd: &Path) -> Result<PathBuf, Error> {
     }
     fs::read_dir(&root).map_err(|e| target_error(&e, &root))?;
     Ok(root)
+}
+/// A directory is searched as the root; a regular file as its parent plus its basename.
+fn directory_or_file(path: Option<&Path>, cwd: &Path) -> Result<(PathBuf, Option<String>), Error> {
+    let target = resolve(path, cwd)?;
+    if target.is_dir() {
+        fs::read_dir(&target).map_err(|e| target_error(&e, &target))?;
+        Ok((target, None))
+    } else if target.is_file() {
+        File::open(&target).map_err(|e| target_error(&e, &target))?;
+        let parent = target.parent().map(Path::to_path_buf).unwrap_or_default();
+        let name = target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        Ok((parent, Some(name)))
+    } else {
+        Err(invalid(
+            ErrorCode::InvalidTarget,
+            "path is neither a directory nor a regular file",
+        ))
+    }
 }
 fn depth(depth: u32) -> Result<u32, Error> {
     if (1..=MAX_DEPTH).contains(&depth) {
@@ -184,25 +207,7 @@ pub fn prepare(
             if *context > MAX_CONTEXT {
                 return Err(invalid(ErrorCode::InvalidInput, "context must be 0..20"));
             }
-            let target = resolve(path.as_deref(), cwd)?;
-            let (root, file) = if target.is_dir() {
-                fs::read_dir(&target).map_err(|e| target_error(&e, &target))?;
-                (target, None)
-            } else if target.is_file() {
-                File::open(&target).map_err(|e| target_error(&e, &target))?;
-                let parent = target.parent().map(Path::to_path_buf).unwrap_or_default();
-                let name = target
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default()
-                    .to_owned();
-                (parent, Some(name))
-            } else {
-                return Err(invalid(
-                    ErrorCode::InvalidTarget,
-                    "path is neither a directory nor a regular file",
-                ));
-            };
+            let (root, file) = directory_or_file(path.as_deref(), cwd)?;
             DiscoveryJob::Search(SearchJob {
                 in_repo: in_repo(&root),
                 root: utf8(&root),
@@ -261,6 +266,60 @@ pub fn prepare(
                 limits: limits.clone(),
             })
         }
+        DiscoveryRequest::CodeSearch {
+            pattern,
+            lang,
+            path,
+            include_ignored,
+        } => {
+            if pattern.is_empty() || lang.is_empty() {
+                return Err(invalid(
+                    ErrorCode::InvalidInput,
+                    "pattern and language must not be empty",
+                ));
+            }
+            if pattern.contains('\0') {
+                return Err(invalid(
+                    ErrorCode::InvalidPattern,
+                    "pattern must not contain NUL",
+                ));
+            }
+            let language = ast_grep::language(lang).ok_or_else(|| {
+                invalid(
+                    ErrorCode::UnsupportedLanguage,
+                    "unsupported language; supported: rust, javascript, typescript, python, go",
+                )
+            })?;
+            let (root, file) = directory_or_file(path.as_deref(), cwd)?;
+            if file.as_deref().is_some_and(|f| !language.owns(f)) {
+                return Err(invalid(
+                    ErrorCode::InvalidInput,
+                    "the file's extension does not belong to the language",
+                ));
+            }
+            DiscoveryJob::CodeSearch(CodeSearchJob {
+                in_repo: in_repo(&root),
+                root: utf8(&root),
+                file,
+                pattern: pattern.clone(),
+                lang: language.name.to_owned(),
+                include_ignored: *include_ignored,
+                limits: limits.clone(),
+            })
+        }
+        DiscoveryRequest::CodeStats {
+            path,
+            include_ignored,
+        } => {
+            let (root, file) = directory_or_file(path.as_deref(), cwd)?;
+            DiscoveryJob::CodeStats(CodeStatsJob {
+                in_repo: in_repo(&root),
+                root: utf8(&root),
+                file,
+                include_ignored: *include_ignored,
+                limits: limits.clone(),
+            })
+        }
     };
     let adapter = tools::adapter(&job);
     let plan = adapter.plan()?;
@@ -271,14 +330,16 @@ pub fn prepare(
         plan,
     })
 }
-/// The tool must be installed before a task is registered for it.
-pub fn ensure_tool(plan: &ExecutionPlan) -> Result<(), Error> {
-    tools::locate(&plan.program).map(|_| ()).ok_or_else(|| {
+/// The tool must be installed, and capable of what the job needs, before a task is
+/// registered for it.
+pub fn ensure_tool(job: &DiscoveryJob, plan: &ExecutionPlan) -> Result<(), Error> {
+    tools::locate(&plan.program).ok_or_else(|| {
         Error::new(
             ErrorCode::MissingTool,
             format!("{} is not installed", plan.program.to_string_lossy()),
         )
-    })
+    })?;
+    tools::adapter(job).preflight()
 }
 
 /// Room kept for the header when truncation adds a reason to it.

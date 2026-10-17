@@ -383,12 +383,49 @@ fn doctor_tool_and_store_failures_are_structured() {
     assert_eq!(optional["level"], "warning");
     assert_eq!(optional["tool"]["installed"], false);
     assert_eq!(optional["tool"]["feature_available"], false);
-    let unprovided = find(&checks, "tokei").unwrap();
-    assert_eq!(unprovided["level"], "fail");
-    assert_eq!(
-        unprovided["tool"]["supported_versions"],
-        serde_json::json!([])
+    for (name, range) in [
+        ("tokei", ">=15.0.0 (tested 15.0.0)"),
+        ("ast-grep", ">=0.51.0 (tested 0.51.0)"),
+    ] {
+        let absent = find(&checks, name).unwrap();
+        assert_eq!(absent["level"], "fail");
+        assert_eq!(absent["tool"]["installed"], false);
+        assert_eq!(
+            absent["tool"]["supported_versions"],
+            serde_json::json!([range])
+        );
+    }
+    // A tokei built without JSON output is reported as an unsupported capability.
+    std::fs::write(
+        bin.join("tokei"),
+        "#!/bin/sh\nprintf 'tokei 15.0.0 compiled with serialization support: cbor, yaml\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("tokei"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (_, checks) = scoped("discovery");
+    let no_json = find(&checks, "tokei").unwrap();
+    assert_eq!(no_json["level"], "fail");
+    assert_eq!(no_json["tool"]["installed"], true);
+    assert_eq!(no_json["tool"]["version"], "15.0.0");
+    assert_eq!(no_json["tool"]["feature_available"], false);
+    assert!(no_json["message"].as_str().unwrap().contains(
+        "unsupported tool capability: tokei 15.0.0 was built without JSON output support"
+    ));
+    assert!(
+        no_json["remedy"]
+            .as_str()
+            .unwrap()
+            .contains("build with JSON output support")
     );
+    std::fs::write(
+        bin.join("tokei"),
+        "#!/bin/sh\nprintf 'tokei 15.0.0 compiled with serialization support: json, cbor, yaml\\n'\n",
+    )
+    .unwrap();
+    let (_, checks) = scoped("discovery");
+    let full = find(&checks, "tokei").unwrap();
+    assert_eq!(full["level"], "pass");
+    assert_eq!(full["tool"]["feature_available"], true);
     assert!(find(&checks, "hyperfine").is_none());
     let (_, checks) = scoped("performance");
     assert_eq!(find(&checks, "hyperfine").unwrap()["level"], "fail");

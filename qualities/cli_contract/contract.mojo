@@ -71,6 +71,9 @@ struct ErrorCode(Copyable, Movable):
             "invalid_target",
             "target_not_found",
             "unsupported_encoding",
+            "unsupported_language",
+            "unsupported_tool_capability",
+            "parse_error",
         ]
         var exits: List[Int] = [
             1,
@@ -99,6 +102,9 @@ struct ErrorCode(Copyable, Movable):
             2,
             2,
             2,
+            16,
+            16,
+            11,
         ]
         for i in range(len(names)):
             if value == names[i]:
@@ -197,7 +203,7 @@ def validate_response(
     if doc.nodes[error].kind != Node.NULL:
         var code = ErrorCode(string_value(doc, doc.member(error, "code")))
         var message = string_value(doc, doc.member(error, "message"))
-        require(exit_code == code.exit_code or (exit_code == 0 and doc.nodes[command].kind == Node.STRING and (doc.nodes[command].text == "run" or doc.nodes[command].text.startswith("fs ")) and result.execution_id), "error/exit mismatch")
+        require(exit_code == code.exit_code or (exit_code == 0 and doc.nodes[command].kind == Node.STRING and (doc.nodes[command].text == "run" or doc.nodes[command].text.startswith("fs ") or doc.nodes[command].text.startswith("code ")) and result.execution_id), "error/exit mismatch")
         result.error = ContractError(code^, message)
     else:
         require(
