@@ -1,6 +1,12 @@
 //! `fd` backs both `fs list` (every entry below the root) and `fs find` (name filter).
 use super::*;
-use std::{ffi::OsString, fs, path::PathBuf};
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use std::{
+    collections::HashMap,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
 
 /// Matcher used where fd cannot express the requested semantics (root-relative full path)
 /// and by input validation; it uses the same engines as fd (`regex`, `globset`).
@@ -100,6 +106,9 @@ impl DiscoveryAdapter for Fd {
         let mut args: Vec<OsString> = [
             "--hidden",
             "--no-global-ignore-file",
+            // fd cannot disable info/exclude independently of .gitignore.
+            // Enumerate without personal ignore rules; apply .gitignore below.
+            "--no-ignore",
             "--color",
             "never",
             "--show-errors",
@@ -113,12 +122,6 @@ impl DiscoveryAdapter for Fd {
         .map(OsString::from)
         .into();
         args.push(self.scope.depth.to_string().into());
-        if self.scope.include_ignored {
-            args.push("--no-ignore".into());
-        } else if !self.scope.in_repo {
-            // Outside a repository only ignore files below the root apply.
-            args.extend(["--no-require-git", "--no-ignore-parent"].map(OsString::from));
-        }
         let pattern = match &self.find {
             None => "^".to_owned(),
             Some(f) => {
@@ -170,6 +173,8 @@ impl DiscoveryAdapter for Fd {
             limits: self.scope.limits.clone(),
             byte_budget,
             filter,
+            gitignore: (!self.scope.include_ignored)
+                .then(|| GitignoreFilter::new(&self.scope.root, self.scope.in_repo)),
             pending: Vec::new(),
             skipping: false,
             entries: 0,
@@ -188,6 +193,7 @@ struct FdNormalizer {
     limits: DiscoveryLimits,
     byte_budget: u64,
     filter: Option<PathFilter>,
+    gitignore: Option<GitignoreFilter>,
     pending: Vec<u8>,
     skipping: bool,
     entries: u64,
@@ -231,13 +237,6 @@ impl FdNormalizer {
         if self.filter.as_ref().is_some_and(|f| !f.is_match(relative)) {
             return Flow::Continue;
         }
-        if self.items.len() as u64 >= self.limits.max_items {
-            return Flow::Stop(Stop::Truncated(TruncationReason::MaxItems));
-        }
-        let size = relative.len() as u64 + 48;
-        if self.bytes + size > self.byte_budget {
-            return Flow::Stop(Stop::Truncated(TruncationReason::ArtifactBytes));
-        }
         let entry_type = match fs::symlink_metadata(self.root.join(relative)) {
             Ok(meta) => entry_type(&meta),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -259,6 +258,29 @@ impl FdNormalizer {
                 return Flow::Continue;
             }
         };
+        if let Some(filter) = self.gitignore.as_mut() {
+            match filter.ignored(relative, entry_type == EntryType::Directory) {
+                Ok(true) => return Flow::Continue,
+                Ok(false) => (),
+                Err(path) => {
+                    self.issues.error(
+                        ResultIssue::new(
+                            ErrorCode::PartialResult,
+                            "cannot read or parse .gitignore",
+                        )
+                        .at(path),
+                    );
+                    return Flow::Continue;
+                }
+            }
+        }
+        if self.items.len() as u64 >= self.limits.max_items {
+            return Flow::Stop(Stop::Truncated(TruncationReason::MaxItems));
+        }
+        let size = relative.len() as u64 + 48;
+        if self.bytes + size > self.byte_budget {
+            return Flow::Stop(Stop::Truncated(TruncationReason::ArtifactBytes));
+        }
         self.bytes += size;
         self.items.push(EntryItem {
             path: relative.to_owned(),
@@ -273,6 +295,13 @@ impl FdNormalizer {
             };
             let (path, message) = rest.rsplit_once(": ").unwrap_or(("", rest));
             let path = path.strip_prefix("./").unwrap_or(path);
+            if self
+                .gitignore
+                .as_mut()
+                .is_some_and(|filter| filter.ignored(path, true) == Ok(true))
+            {
+                continue;
+            }
             match classify_io_message(message) {
                 ErrorCode::PermissionDenied => self.issues.error(
                     ResultIssue::new(ErrorCode::PermissionDenied, "directory is not readable")
@@ -349,5 +378,90 @@ impl Normalizer for FdNormalizer {
                 warnings: self.issues.warnings,
             },
         }
+    }
+}
+
+/// Only .gitignore participates. No global excludes, info/exclude, .ignore or .fdignore.
+/// fd still bounds traversal by depth and timeout; every emitted candidate counts toward
+/// max_entries, including candidates filtered here. We never recurse ourselves.
+struct GitignoreFilter {
+    root: PathBuf,
+    base: PathBuf,
+    rules: HashMap<PathBuf, Result<Gitignore, ()>>,
+}
+impl GitignoreFilter {
+    fn new(root: &str, in_repo: bool) -> Self {
+        let root = PathBuf::from(root);
+        let base = if in_repo {
+            root.ancestors()
+                .find(|p| p.join(".git").exists())
+                .unwrap_or(&root)
+                .to_path_buf()
+        } else {
+            root.clone()
+        };
+        Self {
+            root,
+            base,
+            rules: HashMap::new(),
+        }
+    }
+    fn matcher(&mut self, dir: &Path) -> Result<&Gitignore, String> {
+        let entry = self.rules.entry(dir.to_path_buf()).or_insert_with(|| {
+            let mut builder = GitignoreBuilder::new(dir);
+            let file = dir.join(".gitignore");
+            // Missing ignore files are normal; unreadable or malformed ones are not.
+            match fs::symlink_metadata(&file) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                // Do not follow an ignore file symlink outside the scan scope.
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return builder.build().map_err(|_| ());
+                }
+                Ok(_) => {
+                    if builder.add(&file).is_some() {
+                        return Err(());
+                    }
+                }
+                Err(_) => return Err(()),
+            }
+            builder.build().map_err(|_| ())
+        });
+        entry
+            .as_ref()
+            .map_err(|_| dir.join(".gitignore").to_string_lossy().into_owned())
+    }
+    fn ignored(&mut self, relative: &str, is_dir: bool) -> Result<bool, String> {
+        let target = self.root.join(relative);
+        let mut dirs: Vec<_> = self
+            .root
+            .ancestors()
+            .take_while(|p| p.starts_with(&self.base))
+            .map(Path::to_path_buf)
+            .collect();
+        dirs.reverse();
+        let parts: Vec<_> = Path::new(relative).components().collect();
+        let mut current = self.root.clone();
+        for (i, part) in parts.iter().enumerate() {
+            current.push(part.as_os_str());
+            let directory = i + 1 < parts.len() || is_dir;
+            let mut ignored = false;
+            for dir in &dirs {
+                let matched = self.matcher(dir)?.matched(&current, directory);
+                if matched.is_ignore() {
+                    ignored = true;
+                } else if matched.is_whitelist() {
+                    ignored = false;
+                }
+            }
+            // A negation inside an excluded directory cannot re-include its descendants.
+            // The explicitly selected root itself is exempt, as required by the CLI.
+            if ignored {
+                return Ok(true);
+            }
+            if current != target {
+                dirs.push(current.clone());
+            }
+        }
+        Ok(false)
     }
 }
