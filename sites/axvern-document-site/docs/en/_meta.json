@@ -1,1 +1,9 @@
-["index", "getting-started", "cli", "configuration", "architecture", "release"]
+[
+  "index",
+  "getting-started",
+  "cli",
+  "discovery",
+  "configuration",
+  "architecture",
+  "release"
+]

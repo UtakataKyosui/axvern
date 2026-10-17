@@ -16,15 +16,12 @@ fn installed(name: &str) -> bool {
 }
 macro_rules! live {
     () => {
-        if !["pueue", "pueued", "fd", "rg", "bat"]
-            .iter()
-            .all(|tool| installed(tool))
-        {
-            eprintln!("skipped: pueue, fd, rg and bat are required");
+        if !discovery_tools(&["pueue", "pueued", "fd", "rg", "bat"]) {
             return;
         }
     };
 }
+
 fn write(root: &Path, relative: &str, text: &str) {
     let path = root.join(relative);
     fs::create_dir_all(path.parent().unwrap()).unwrap();

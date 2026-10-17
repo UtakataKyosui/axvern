@@ -2,7 +2,7 @@
 
 Rust 製の非同期コマンド実行 CLI です。Pueue 4.0.4 に実行を委譲し、Policy と非対話時の承認拒否、独自実行 ID、状態照会、履歴、環境診断を提供します。
 
-現在のソースで実装済み: `run` / `status` / `wait` / `result` / `history` / `doctor` / `policy check`。リリース前です。ライセンス・バイナリ配布先・レジストリ・公開サイトのホスティングは未決定で、この作業では公開・デプロイを行いません。
+現在のソースで実装済み: `run` / `status` / `wait` / `result` / `history` / `doctor` / `policy check`、`fs list/find/search/read/analyze`、`code search/stats`、限定的なopt-in置換。リリース前です。ライセンス・バイナリ配布先・レジストリ・公開サイトのホスティングは未決定で、この作業では公開・デプロイを行いません。
 
 ## Build / install
 
@@ -56,11 +56,12 @@ axvern run -- true </dev/null
 
 - [導入](sites/axvern-document-site/docs/en/getting-started.md)
 - [CLI / JSON / 終了コード](sites/axvern-document-site/docs/en/cli.md)
+- [v0.2の調査コマンド・外部依存・制約](sites/axvern-document-site/docs/en/discovery.md)
 - [設定・Policy・保存領域](sites/axvern-document-site/docs/en/configuration.md)
 - [構成・制限・復旧](sites/axvern-document-site/docs/en/architecture.md)
 - [リリース条件と検証証拠](sites/axvern-document-site/docs/en/release.md)
 
-要件・設計の正本は [GitHub Issues](https://github.com/UtakataKyosui/axvern/issues)。`docs` は移管案内、`sites` は実装済みの仕様説明です。v0.2 の調査/置換、v0.3 の `query` / `recall` は未提供です。
+要件・設計の正本は [GitHub Issues](https://github.com/UtakataKyosui/axvern/issues)。`docs` は移管案内、`sites` は実装済みの仕様説明です。v0.2の調査・限定置換は実装済みです。v0.3の `query` / `recall` は未提供です。
 
 ## Development
 
@@ -76,3 +77,5 @@ pnpm --dir sites/axvern-document-site dev
 ```
 
 品質ゲートは Rust fmt/check/Clippy/build/test、サイト check/build/内部リンク検査、隔離 Pueue spike、隔離 install smoke を実行します。CI は Ubuntu/macOS の証拠を artifact に保存します。
+
+完全なv0.2実機ゲートにはfd 10.5.0、rg 15.2.0、bat 0.26.1、ast-grep 0.51.0、tokei 15.0.0（JSON対応）が必要です。CIは固定版を導入し、`AXVERN_REQUIRE_DISCOVERY_TOOLS=1` で依存不足によるスキップを失敗にします。ローカルの任意スキップはv0.2受入完了の証拠にはしません。

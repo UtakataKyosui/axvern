@@ -22,6 +22,7 @@ jobs:
       - id: plan
         run: |
           python3 qualities/scripts/test_ci_plan.py
+          python3 qualities/scripts/test_discovery_tools.py
           python3 qualities/scripts/ci_plan.py
   verify:
     needs: changes
@@ -76,6 +77,28 @@ jobs:
         run: cargo install pueue --version 4.0.4 --locked --root "$RUNNER_TEMP/pueue"
       - if: needs.changes.outputs.rust == 'true'
         run: echo "$RUNNER_TEMP/pueue/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        id: discovery
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          path: ${{ runner.temp }}/discovery
+          key: discovery-v1-${{ runner.os }}-${{ runner.arch }}-fd10.5.0-rg15.2.0-bat0.26.1-tokei15.0.0-rust1.98.0
+      - name: Install pinned discovery CLIs
+        if: needs.changes.outputs.rust == 'true' && steps.discovery.outputs.cache-hit != 'true'
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/discovery-build
+        run: |
+          cargo install fd-find --version 10.5.0 --locked --root "$RUNNER_TEMP/discovery"
+          cargo install ripgrep --version 15.2.0 --locked --root "$RUNNER_TEMP/discovery"
+          cargo install bat --version 0.26.1 --locked --root "$RUNNER_TEMP/discovery"
+          cargo install tokei --version 15.0.0 --locked --root "$RUNNER_TEMP/discovery"
+      - name: Install pinned ast-grep CLI
+        if: needs.changes.outputs.rust == 'true'
+        run: npm install --prefix "$RUNNER_TEMP/ast-grep" @ast-grep/cli@0.51.0
+      - if: needs.changes.outputs.rust == 'true'
+        run: |
+          echo "$RUNNER_TEMP/discovery/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/ast-grep/node_modules/.bin" >> "$GITHUB_PATH"
       - id: pnpm
         if: needs.changes.outputs.site == 'true'
         run: echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
@@ -90,6 +113,7 @@ jobs:
       - name: Check affected groups (always execute tests, never cache results)
         shell: bash
         env:
+          AXVERN_REQUIRE_DISCOVERY_TOOLS: '1'
           CHECK_RUST: ${{ needs.changes.outputs.rust }}
           CHECK_SITE: ${{ needs.changes.outputs.site }}
           CHECK_LINKS: ${{ needs.changes.outputs.links }}
@@ -115,4 +139,5 @@ jobs:
             target/release-evidence.json
             target/quality.log
             target/cli-contract-evidence.json
+            target/discovery-tools.json
           if-no-files-found: ignore

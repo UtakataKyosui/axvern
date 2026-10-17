@@ -12,26 +12,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn installed(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| {
-            dir.join(name)
-                .metadata()
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
-    })
-}
 macro_rules! live {
     () => {
-        if !["pueue", "pueued", "fd", "tokei"]
-            .iter()
-            .all(|tool| installed(tool))
-        {
-            eprintln!("skipped: pueue, fd and tokei are required");
+        if !discovery_tools(&["pueue", "pueued", "fd", "tokei"]) {
             return;
         }
     };
 }
+
 fn write(root: &Path, relative: &str, text: &str) {
     let path = root.join(relative);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -327,6 +315,10 @@ fn a_failed_child_leaves_a_partial_result_and_the_others_run_once() {
     assert_eq!(code, 0, "{started}");
     let id = started["execution_id"].as_str().unwrap().to_owned();
     if started["state"] == "done" {
+        assert!(
+            std::env::var_os("AXVERN_REQUIRE_DISCOVERY_TOOLS").is_none(),
+            "v0.2 live gate requires the failed-child PATH fixture to execute"
+        );
         eprintln!("skipped: this Pueue does not pass the client's PATH to its tasks");
         return;
     }

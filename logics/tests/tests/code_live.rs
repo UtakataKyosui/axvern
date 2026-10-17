@@ -5,26 +5,14 @@ use common::*;
 use serde_json::Value;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
-fn installed(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| {
-            dir.join(name)
-                .metadata()
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
-    })
-}
 macro_rules! live {
     () => {
-        if !["pueue", "pueued", "ast-grep", "tokei"]
-            .iter()
-            .all(|tool| installed(tool))
-        {
-            eprintln!("skipped: pueue, ast-grep and tokei are required");
+        if !discovery_tools(&["pueue", "pueued", "ast-grep", "tokei"]) {
             return;
         }
     };
 }
+
 fn write(root: &Path, relative: &str, text: &str) {
     let path = root.join(relative);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
