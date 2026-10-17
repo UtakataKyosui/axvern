@@ -9,7 +9,7 @@ Install the development-only compiler once with `uv venv target/mojo-env --pytho
 
 `cli_contract/cases.json` holds the argument/error/boundary cases; `cli_contract/fixtures.json` holds accepted and rejected JSON/envelopes. The self-test also checks UTF-8 decoding and open-stdin prompt detection. The evaluator requires no daemon and checks no proposed future commands. Every probe reports its case name, and failures include a rule ID. `target/cli-contract-evidence.json` records compiler version, Python version, compile/self-test/probe durations and exit codes and is uploaded with CI artifacts. Timings include the process bridge; no CI speedup is assumed from the language change.
 
-The validator's `cli_contract/rules.json` catalog links each check to its source (reviewed 2026-10-15): [CLI Guidelines](https://clig.dev/) for non-TTY behavior, discovery, color/pager suppression and early validation; [A2A CLI specification §11–12](https://github.com/a2aproject/a2a-cli/blob/main/specification/SPEC.md) for structured output separation and diagnostic redaction. These are selected interoperability principles, not a claim of full A2A conformance. The general JSON validator accepts a single pretty-printed document; the axvern profile separately enforces compact schema-1 framing, empty noninteractive JSON stderr, its existing envelope and exit numbers. External guidance permits diagnostic stderr and does not prescribe axvern's envelope. A2A-specific flags, commands and exit numbers are not imposed.
+The validator's `cli_contract/rules.json` catalog links each check to its source (reviewed 2026-10-15): [CLI Guidelines](https://clig.dev/) for non-TTY behavior, discovery, color/pager suppression and early validation; [A2A CLI specification §11–12](https://github.com/a2aproject/a2a-cli/blob/main/specification/SPEC.md) for structured output separation and diagnostic redaction. These are selected interoperability principles, not a claim of full A2A conformance. The general JSON validator accepts a single pretty-printed document; the axvern profile separately enforces compact schema-2 framing, empty noninteractive JSON stderr, its existing envelope and exit numbers. External guidance permits diagnostic stderr and does not prescribe axvern's envelope. A2A-specific flags, commands and exit numbers are not imposed.
 
 Probes hold non-TTY stdin open to detect prompt hangs, use private config/cwd, trap backend/pager invocations, check help/version without valid config, and assert that policy inspection and invalid config never execute a target. Pipe behavior is tested with `TERM=xterm-256color` and color override variables removed; separate checks cover `NO_COLOR` and `TERM=dumb`. The runner drains stdout/stderr through bounded pipes and kills the process group as soon as either stream exceeds 1MiB or the 10-second deadline expires. Regression writers exercise both output limits while still running, and a color-emitting fake checks that opt-outs cannot mask a pipe regression. A 128-level JSON nesting budget also applies. These are probe safeguards, not new product limits. Discovery coverage is currently root help/version, not subcommand help or a machine-readable command catalog.
 
@@ -32,3 +32,18 @@ Cargo registry/gitとdebug/release成果物はOS・アーキテクチャ・ツ�
 manifest/lockfileで分離し、Pueue 4.0.4のインストールとpnpmストアもキャッシュする。
 テスト結果・実機検証の証跡はキャッシュしない。Rust変更時は関連チェックを必ず再実行する。
 feature branchのpushとPRの二重実行を避け、古い同一PRの実行はキャンセルする。
+
+## v0.2 discovery acceptance
+
+CI installs the pinned fd/rg/bat/ast-grep/tokei toolchain and exports
+`AXVERN_REQUIRE_DISCOVERY_TOOLS=1`. `qualities:test` first runs
+`python3 qualities/scripts/discovery_tools.py`, which fails on a missing tool,
+wrong pinned version or tokei without JSON serialization. It writes
+`target/discovery-tools.json`; CI uploads this alongside the other evidence.
+The three discovery live suites also fail on missing tools in strict mode.
+Without that environment, local development keeps explicit optional skips.
+`moon run qualities:discovery-tools` provides the preflight independently.
+
+See the [v0.2 acceptance matrix](../sites/axvern-document-site/docs/en/release.md)
+for fixture/live coverage and the outstanding undefined AC IDs. Optional
+eza/git/delta/dust/procs are outside the required tool set.

@@ -4,12 +4,15 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from cli_contract import run
 
 metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]))
 binary = Path(metadata["target_directory"]) / "debug" / ("axvern.exe" if os.name == "nt" else "axvern")
 if not binary.is_file():
     raise SystemExit("CLI missing: run moon run qualities:test (build dependency required)")
+if "AXVERN_REQUIRE_DISCOVERY_TOOLS" in os.environ:
+    subprocess.run([sys.executable, "qualities/scripts/discovery_tools.py"], check=True)
 run(binary)
 env = os.environ.copy()
 env["AXVERN_TEST_BIN"] = str(binary)

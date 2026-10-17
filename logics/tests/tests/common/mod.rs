@@ -133,3 +133,31 @@ pub fn cli_json(
     assert!(out.stderr.is_empty(), "JSON diagnostics leaked to stderr");
     serde_json::from_slice(&out.stdout).expect("one JSON response, no diagnostics")
 }
+
+/// Local discovery suites may skip absent optional development tools; the v0.2 CI
+/// gate requires them so a green job cannot mean that all live coverage was skipped.
+pub fn discovery_tools(names: &[&str]) -> bool {
+    let missing: Vec<_> = names
+        .iter()
+        .filter(|name| {
+            !std::env::var_os("PATH").is_some_and(|path| {
+                std::env::split_paths(&path).any(|dir| {
+                    dir.join(name)
+                        .metadata()
+                        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                })
+            })
+        })
+        .copied()
+        .collect();
+    if missing.is_empty() {
+        return true;
+    }
+    assert!(
+        std::env::var_os("AXVERN_REQUIRE_DISCOVERY_TOOLS").is_none(),
+        "v0.2 live gate requires tools: {}",
+        missing.join(", ")
+    );
+    eprintln!("skipped: discovery tools missing: {}", missing.join(", "));
+    false
+}

@@ -469,7 +469,9 @@ fn find_rewrite_preserves_case_sensitive_name_matches() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    for name in ["main.rs", "Main.RS", "MAIN.rs", "other.txt"] {
+    // Distinct basenames also coexist on case-insensitive filesystems (macOS CI).
+    // The uppercase .RS extension must still be excluded by case-sensitive matching.
+    for name in ["main.rs", "other.RS", "UPPER.rs", "other.txt"] {
         std::fs::write(dir.path().join(name), "").unwrap();
     }
     let mut original = plan("find", &[".", "-name", "*.rs"]);
@@ -490,6 +492,6 @@ fn find_rewrite_preserves_case_sensitive_name_matches() {
         names.sort();
         names
     };
-    assert_eq!(paths(&original), ["MAIN.rs", "main.rs"]);
+    assert_eq!(paths(&original), ["UPPER.rs", "main.rs"]);
     assert_eq!(paths(&rewritten), paths(&original));
 }

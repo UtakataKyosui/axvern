@@ -60,3 +60,29 @@ axvern --config /absolute/path/to/axvern.toml run -- true </dev/null
 ```
 
 If `doctor` reports a daemon failure, start `pueued --config` with that same file and check socket permissions. `doctor` displays a remedy; it never installs or repairs tools automatically.
+
+## Install the pinned discovery tools
+
+For the full v0.2 acceptance environment, install these in addition to Pueue:
+
+```sh
+cargo install --locked fd-find --version 10.5.0
+cargo install --locked ripgrep --version 15.2.0
+cargo install --locked bat --version 0.26.1
+cargo install --locked tokei --version 15.0.0
+npm install --global @ast-grep/cli@0.51.0
+python3 qualities/scripts/discovery_tools.py
+```
+
+The tokei version probe must list JSON serialization support. eza is required only if you enable `ls-to-eza`, not for structured filesystem discovery. Add the [backend Policy rules](/discovery) before noninteractive use, then run:
+
+```sh
+axvern --config /absolute/path/to/axvern.toml doctor --scope discovery
+axvern --config /absolute/path/to/axvern.toml fs list . --depth 2
+axvern --config /absolute/path/to/axvern.toml code stats .
+axvern --config /absolute/path/to/axvern.toml fs analyze . --wait 0s
+# Use the returned parent ID; retrieval never re-registers its children:
+axvern --config /absolute/path/to/axvern.toml result <execution-id>
+```
+
+The source checkout remains pre-release; these installation commands do not imply a registry publication of axvern.
