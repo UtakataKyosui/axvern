@@ -141,7 +141,7 @@ fn search_plan_is_plain_argv_and_the_pattern_cannot_add_a_rule() {
 fn stats_plan_is_plain_argv() {
     let argv = args(&stats_job(10));
     assert_eq!(
-        argv,
+        &argv[..6],
         [
             "--streaming",
             "json",
@@ -149,17 +149,21 @@ fn stats_plan_is_plain_argv() {
             "--exclude",
             ".git",
             "--no-ignore-dot",
-            "--",
-            "."
         ]
     );
+    assert!(argv.contains(&"--no-ignore".into()));
+    assert!(
+        argv.windows(2)
+            .any(|w| w[0] == "--exclude" && w[1].matches('*').count() == 33)
+    );
+    assert_eq!(argv[argv.len() - 2..], ["--", "."]);
     let DiscoveryJob::CodeStats(mut job) = stats_job(10) else {
         unreachable!()
     };
     job.in_repo = false;
     job.file = Some("-x.rs".into());
     let outside = args(&DiscoveryJob::CodeStats(job.clone()));
-    assert!(outside.contains(&"--no-ignore-parent".into()));
+    assert!(outside.contains(&"--no-ignore".into()));
     assert_eq!(outside[outside.len() - 2..], ["--", "-x.rs"]);
     job.include_ignored = true;
     assert!(args(&DiscoveryJob::CodeStats(job)).contains(&"--no-ignore".into()));
@@ -428,6 +432,7 @@ fn language_stats_keep_embedded_languages_out_of_the_totals() {
         outcome.document.summary,
         DiscoverySummary::CodeStats {
             root: "/work".into(),
+            scan_depth: Some(MAX_DEPTH),
             files: 3,
             code: 8,
             comments: 1,
@@ -452,6 +457,7 @@ fn an_empty_target_has_zero_totals() {
         outcome.document.summary,
         DiscoverySummary::CodeStats {
             root: "/work".into(),
+            scan_depth: Some(MAX_DEPTH),
             files: 0,
             code: 0,
             comments: 0,
@@ -460,6 +466,28 @@ fn an_empty_target_has_zero_totals() {
             skipped_files: None,
         }
     );
+}
+
+#[test]
+fn duplicate_stats_records_do_not_double_count_the_same_path() {
+    let stream = fixture("tokei-stream.jsonl");
+    let once = run(&stats_job(100), &[&stream], ok(0), b"");
+    let twice = run(&stats_job(100), &[&stream, &stream], ok(0), b"");
+    assert_eq!(once.document, twice.document);
+}
+
+#[test]
+fn old_saved_statistics_do_not_claim_a_new_depth_bound() {
+    let old = json!({"root":"/old", "files":0, "code":0, "comments":0,
+        "blanks":0, "scope_complete":true, "skipped_files":null});
+    let summary: DiscoverySummary = serde_json::from_value(old).unwrap();
+    assert!(matches!(
+        summary,
+        DiscoverySummary::CodeStats {
+            scan_depth: None,
+            ..
+        }
+    ));
 }
 
 #[test]

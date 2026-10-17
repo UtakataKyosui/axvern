@@ -190,6 +190,84 @@ fn help_lists_the_discovery_commands() {
 }
 
 #[test]
+fn reading_a_fifo_is_rejected_without_waiting_for_a_writer() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    let fifo = dir.join("pipe");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let config = config(&dir, "");
+    let mut child = Command::new(std::env::var_os("AXVERN_TEST_BIN").unwrap())
+        .arg("--config")
+        .arg(&config)
+        .args(["fs", "read"])
+        .arg(&fifo)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            let _ = child.wait();
+            panic!("fs read blocked waiting for a FIFO writer");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["error"]["code"], "invalid_target");
+    assert_eq!(response["execution_id"], serde_json::Value::Null);
+}
+
+#[test]
+fn read_line_range_accepts_the_last_valid_line_and_rejects_only_real_overflow() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    fs::write(dir.join("text"), "one\n").unwrap();
+    let config = config(
+        &dir,
+        "[[policy.rules]]\nid='allow'\neffect='allow'\ncommand='bat'\n",
+    );
+    let empty = dir.join("bin");
+    fs::create_dir(&empty).unwrap();
+    for (from, lines, expected) in [
+        (i64::MAX.to_string(), "1", 5),
+        ((i64::MAX - 1).to_string(), "2", 5),
+        (i64::MAX.to_string(), "2", 2),
+        ((i64::MAX as u64 + 1).to_string(), "1", 2),
+    ] {
+        let (code, response) = cli(
+            &dir,
+            &config,
+            Some(&empty),
+            &["fs", "read", "text", "--from-line", &from, "--lines", lines],
+        );
+        assert_eq!(code, expected, "{from}: {lines}: {response}");
+        assert_eq!(
+            response["error"]["code"],
+            if expected == 2 {
+                "invalid_input"
+            } else {
+                "missing_tool"
+            }
+        );
+        assert_eq!(response["execution_id"], serde_json::Value::Null);
+    }
+}
+
+#[test]
 fn code_input_is_checked_before_registration() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().canonicalize().unwrap();

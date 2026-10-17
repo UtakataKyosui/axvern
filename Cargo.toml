@@ -19,6 +19,7 @@ regex = { version = "=1.13.1", default-features = false, features = ["std", "uni
 ignore = "=0.4.33"
 globset = { version = "=0.4.20", default-features = false }
 tempfile = "=3.27.0"
+libc = "=0.2.190"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

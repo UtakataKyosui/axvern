@@ -5,6 +5,7 @@
 //! (JavaScript in HTML) are listed per host as `embedded` and are not part of the host's
 //! counts or of the summary totals, so no line is counted twice.
 //! [`parse_record`] and [`Tally`] do not depend on the worker; other commands may reuse them.
+use super::scope::{FileScope, depth_exclude};
 use super::*;
 use serde_json::Value;
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
@@ -36,11 +37,11 @@ impl DiscoveryAdapter for Tokei {
         ]
         .map(OsString::from)
         .into();
-        if j.include_ignored {
-            args.push("--no-ignore".into());
-        } else if !j.in_repo {
-            args.push("--no-ignore-parent".into());
-        }
+        args.extend([
+            "--no-ignore".into(),
+            "--exclude".into(),
+            depth_exclude().into(),
+        ]);
         args.push("--".into());
         args.push(j.file.clone().unwrap_or_else(|| ".".into()).into());
         Ok(ExecutionPlan {
@@ -52,6 +53,13 @@ impl DiscoveryAdapter for Tokei {
     fn normalizer(&self, _byte_budget: u64) -> Result<Box<dyn Normalizer>, Error> {
         Ok(Box::new(TokeiNormalizer {
             job: self.0.clone(),
+            scope: FileScope::new(
+                &self.0.root,
+                self.0.in_repo,
+                self.0.include_ignored,
+                self.0.file.is_some(),
+            ),
+            seen: std::collections::HashSet::new(),
             pending: Vec::new(),
             skipping: false,
             records: 0,
@@ -196,6 +204,8 @@ impl Tally {
 const RECORD_LIMIT: usize = 4 * 1024 * 1024;
 struct TokeiNormalizer {
     job: CodeStatsJob,
+    scope: FileScope,
+    seen: std::collections::HashSet<String>,
     pending: Vec<u8>,
     skipping: bool,
     records: u64,
@@ -212,7 +222,14 @@ impl TokeiNormalizer {
         }
         self.records += 1;
         match parse_record(raw) {
-            Some(record) => self.tally.add(&record),
+            Some(record) => {
+                let path = record.path.strip_prefix("./").unwrap_or(&record.path);
+                if self.scope.allows(path, false, &mut self.issues)
+                    && self.seen.insert(path.to_owned())
+                {
+                    self.tally.add(&record);
+                }
+            }
             None => self.issues.error(ResultIssue::new(
                 ErrorCode::BackendFailure,
                 "unreadable tokei record",
@@ -248,6 +265,9 @@ impl TokeiNormalizer {
                 continue;
             };
             let path = path.strip_prefix("./").unwrap_or(path);
+            if !self.scope.allows(path, true, &mut self.issues) {
+                continue;
+            }
             match classify_io_message(reason) {
                 ErrorCode::TargetNotFound => self.issues.warning(
                     WarningCode::EntryVanished,
@@ -308,13 +328,6 @@ impl Normalizer for TokeiNormalizer {
             self.issues
                 .error(ResultIssue::new(ErrorCode::BackendFailure, "tokei failed"));
         }
-        if !self.job.include_ignored && !self.job.in_repo {
-            self.issues.warning(
-                WarningCode::IgnoreRulesNotApplied,
-                "ignore files are applied only inside a Git worktree",
-                None,
-            );
-        }
         let (files, code, comments, blanks) = self.tally.totals();
         let mut items = self.tally.items();
         if items.len() as u64 > self.job.limits.max_items {
@@ -330,6 +343,7 @@ impl Normalizer for TokeiNormalizer {
             document: DiscoveryDocument {
                 summary: DiscoverySummary::CodeStats {
                     root: self.job.root,
+                    scan_depth: Some(MAX_DEPTH),
                     files,
                     code,
                     comments,

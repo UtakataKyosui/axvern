@@ -384,13 +384,13 @@ impl Normalizer for FdNormalizer {
 /// Only .gitignore participates. No global excludes, info/exclude, .ignore or .fdignore.
 /// fd still bounds traversal by depth and timeout; every emitted candidate counts toward
 /// max_entries, including candidates filtered here. We never recurse ourselves.
-struct GitignoreFilter {
+pub(super) struct GitignoreFilter {
     root: PathBuf,
     base: PathBuf,
     rules: HashMap<PathBuf, Result<Gitignore, ()>>,
 }
 impl GitignoreFilter {
-    fn new(root: &str, in_repo: bool) -> Self {
+    pub(super) fn new(root: &str, in_repo: bool) -> Self {
         let root = PathBuf::from(root);
         let base = if in_repo {
             root.ancestors()
@@ -417,6 +417,7 @@ impl GitignoreFilter {
                 Ok(meta) if meta.file_type().is_symlink() => {
                     return builder.build().map_err(|_| ());
                 }
+                Ok(meta) if !meta.is_file() => return Err(()),
                 Ok(_) => {
                     if builder.add(&file).is_some() {
                         return Err(());
@@ -430,7 +431,7 @@ impl GitignoreFilter {
             .as_ref()
             .map_err(|_| dir.join(".gitignore").to_string_lossy().into_owned())
     }
-    fn ignored(&mut self, relative: &str, is_dir: bool) -> Result<bool, String> {
+    pub(super) fn ignored(&mut self, relative: &str, is_dir: bool) -> Result<bool, String> {
         let target = self.root.join(relative);
         let mut dirs: Vec<_> = self
             .root

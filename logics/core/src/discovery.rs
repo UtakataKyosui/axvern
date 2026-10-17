@@ -10,6 +10,7 @@ use crate::{
     store::ExecutionStore,
 };
 use axvern_models::*;
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     fs::{self, File},
     io::{Read, Write},
@@ -19,6 +20,35 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+/// Never block on a FIFO/device swapped in between path validation and opening.
+fn open_regular(path: &Path) -> Result<File, Error> {
+    if !fs::metadata(path)
+        .map_err(|e| target_error(&e, path))?
+        .is_file()
+    {
+        return Err(invalid(
+            ErrorCode::InvalidTarget,
+            "path is not a regular file",
+        ));
+    }
+    let handle = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| target_error(&e, path))?;
+    if !handle
+        .metadata()
+        .map_err(|e| target_error(&e, path))?
+        .is_file()
+    {
+        return Err(invalid(
+            ErrorCode::InvalidTarget,
+            "path is not a regular file",
+        ));
+    }
+    Ok(handle)
+}
 
 /// A validated request: the job the worker needs and the argv Policy must judge.
 #[derive(Debug)]
@@ -85,7 +115,7 @@ fn directory_or_file(path: Option<&Path>, cwd: &Path) -> Result<(PathBuf, Option
         fs::read_dir(&target).map_err(|e| target_error(&e, &target))?;
         Ok((target, None))
     } else if target.is_file() {
-        File::open(&target).map_err(|e| target_error(&e, &target))?;
+        open_regular(&target)?;
         let parent = target.parent().map(Path::to_path_buf).unwrap_or_default();
         let name = target
             .file_name()
@@ -229,7 +259,7 @@ pub fn prepare(
             if !(1..=i64::MAX as u64).contains(from_line)
                 || !(1..=MAX_READ_LINES).contains(lines)
                 || from_line
-                    .checked_add(*lines as u64 + 1)
+                    .checked_add(*lines as u64 - 1)
                     .is_none_or(|e| e > i64::MAX as u64)
             {
                 return Err(invalid(
@@ -238,17 +268,7 @@ pub fn prepare(
                 ));
             }
             let path = resolve(Some(file), cwd)?;
-            let mut handle = File::open(&path).map_err(|e| target_error(&e, &path))?;
-            if !handle
-                .metadata()
-                .map_err(|e| target_error(&e, &path))?
-                .is_file()
-            {
-                return Err(invalid(
-                    ErrorCode::InvalidTarget,
-                    "path is not a regular file",
-                ));
-            }
+            let mut handle = open_regular(&path)?;
             let mut head = [0; 8192];
             let n = handle
                 .read(&mut head)
@@ -452,6 +472,9 @@ fn write_artifact(
             reasons.push(TruncationReason::ArtifactBytes);
         }
         document.completeness = Completeness::new(reasons, document.completeness.partial);
+        if let DiscoverySummary::CodeStats { scope_complete, .. } = &mut document.summary {
+            *scope_complete = false;
+        }
         header = results::encode_document(document)?.0;
     }
     if header.len() as u64
@@ -518,12 +541,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn artifact_truncation_updates_the_statistics_scope_flag() {
+        let path = std::env::temp_dir().join(format!("axvern-stats-header-{}", std::process::id()));
+        let mut file = File::create(&path).unwrap();
+        let mut document = DiscoveryDocument {
+            summary: DiscoverySummary::CodeStats {
+                root: "/r".into(),
+                scan_depth: Some(MAX_DEPTH),
+                files: 1,
+                code: 1,
+                comments: 0,
+                blanks: 0,
+                scope_complete: true,
+                skipped_files: None,
+            },
+            items: vec![DiscoveryItem::Stat(LanguageStatItem {
+                language: "x".repeat(4096),
+                files: 1,
+                code: 1,
+                comments: 0,
+                blanks: 0,
+                embedded: vec![],
+            })],
+            completeness: Completeness::new(vec![], false),
+            errors: vec![],
+            warnings: vec![],
+        };
+        write_artifact(&mut file, &mut document, 2048).unwrap();
+        assert!(document.items.is_empty());
+        assert!(document.completeness.truncated);
+        assert!(matches!(
+            document.summary,
+            DiscoverySummary::CodeStats {
+                scope_complete: false,
+                ..
+            }
+        ));
+        drop(file);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn oversized_header_is_rejected_before_writing() {
         let path = std::env::temp_dir().join(format!("axvern-header-{}", std::process::id()));
         let mut file = File::create(&path).unwrap();
         let mut document = DiscoveryDocument {
             summary: DiscoverySummary::Search {
                 root: "/r".into(),
+                scan_depth: Some(MAX_DEPTH),
                 pattern: "x".repeat(4096),
                 binary_files_skipped: 0,
             },

@@ -1,5 +1,6 @@
 //! `rg --json` backs `fs search`. Positive `--glob` filters are applied here, not by rg:
 //! an rg glob overrides ignore rules and would search ignored files.
+use super::scope::FileScope;
 use super::*;
 use serde_json::Value;
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
@@ -69,6 +70,9 @@ impl DiscoveryAdapter for Rg {
             "--color",
             "never",
             "--hidden",
+            "--no-ignore",
+            "--max-depth",
+            "32",
             "--no-ignore-global",
             "--no-ignore-exclude",
             "--no-ignore-dot",
@@ -88,12 +92,6 @@ impl DiscoveryAdapter for Rg {
             }
             .into(),
         );
-        if j.include_ignored {
-            args.push("--no-ignore".into());
-        } else if !j.in_repo {
-            // Outside a repository only ignore files below the root apply.
-            args.extend(["--no-require-git", "--no-ignore-parent"].map(OsString::from));
-        }
         if j.fixed_strings {
             args.push("--fixed-strings".into());
         }
@@ -117,6 +115,7 @@ impl DiscoveryAdapter for Rg {
             limits: j.limits.clone(),
             byte_budget,
             filter: GlobFilter::compile(&j.globs)?,
+            scope: FileScope::new(&j.root, j.in_repo, j.include_ignored, j.file.is_some()),
             pending: Vec::new(),
             skipping: false,
             file: None,
@@ -155,6 +154,7 @@ struct RgNormalizer {
     limits: DiscoveryLimits,
     byte_budget: u64,
     filter: GlobFilter,
+    scope: FileScope,
     pending: Vec<u8>,
     skipping: bool,
     file: Option<OpenFile>,
@@ -225,8 +225,10 @@ impl RgNormalizer {
                 if body["binary_offset"].is_u64() {
                     if let Some(file) = self.file.take() {
                         self.matches -= file.matches.len() as u64;
+                        if !file.skipped {
+                            self.binary += 1;
+                        }
                     }
-                    self.binary += 1;
                     return Flow::Continue;
                 }
                 self.flush()
@@ -242,7 +244,8 @@ impl RgNormalizer {
         let (path, skipped) = match data(&body["path"]) {
             Some(Data::Text(text)) => {
                 let path = text.strip_prefix("./").unwrap_or(&text).to_owned();
-                let skipped = !self.filter.allows(&path);
+                let skipped = !self.filter.allows(&path)
+                    || !self.scope.allows(&path, false, &mut self.issues);
                 (path, skipped)
             }
             other => {
@@ -394,6 +397,9 @@ impl RgNormalizer {
                 continue;
             };
             let path = path.strip_prefix("./").unwrap_or(path);
+            if !self.scope.allows(path, true, &mut self.issues) {
+                continue;
+            }
             match classify_io_message(message) {
                 ErrorCode::PermissionDenied => self.issues.error(
                     ResultIssue::new(ErrorCode::PermissionDenied, "path is not readable").at(path),
@@ -491,6 +497,7 @@ impl Normalizer for RgNormalizer {
             document: DiscoveryDocument {
                 summary: DiscoverySummary::Search {
                     root: self.summary_root,
+                    scan_depth: Some(MAX_DEPTH),
                     pattern: self.pattern,
                     binary_files_skipped: self.binary,
                 },

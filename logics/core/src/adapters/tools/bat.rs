@@ -10,11 +10,12 @@ impl DiscoveryAdapter for Bat {
     fn plan(&self) -> Result<ExecutionPlan, Error> {
         let j = &self.0;
         // One line beyond the request reveals whether the file continues.
-        let end = j
-            .from_line
-            .checked_add(j.lines as u64)
-            .filter(|end| *end <= i64::MAX as u64)
+        let last = (j.lines as u64)
+            .checked_sub(1)
+            .and_then(|lines| j.from_line.checked_add(lines))
+            .filter(|last| *last <= i64::MAX as u64)
             .ok_or_else(|| Error::new(ErrorCode::InvalidInput, "line range overflows"))?;
+        let end = last.saturating_add(1).min(i64::MAX as u64);
         let mut args: Vec<OsString> = [
             "--no-config",
             "--paging=never",

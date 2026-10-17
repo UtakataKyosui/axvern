@@ -295,6 +295,9 @@ pub enum DiscoverySummary {
     },
     Search {
         root: String,
+        /// None in artifacts saved before bounded search scopes were introduced.
+        #[serde(default)]
+        scan_depth: Option<u32>,
         pattern: String,
         binary_files_skipped: u64,
     },
@@ -311,11 +314,15 @@ pub enum DiscoverySummary {
     },
     CodeSearch {
         root: String,
+        #[serde(default)]
+        scan_depth: Option<u32>,
         lang: String,
         pattern: String,
     },
     CodeStats {
         root: String,
+        #[serde(default)]
+        scan_depth: Option<u32>,
         files: u64,
         code: u64,
         comments: u64,
