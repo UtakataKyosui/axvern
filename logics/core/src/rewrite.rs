@@ -120,9 +120,15 @@ fn find_to_fd(args: &[String]) -> Option<Vec<String>> {
         }
     }
     let name = name?;
-    let mut out: Vec<String> = ["--hidden", "--no-ignore", "--color=never", "--glob"]
-        .map(String::from)
-        .to_vec();
+    let mut out: Vec<String> = [
+        "--hidden",
+        "--no-ignore",
+        "--case-sensitive",
+        "--color=never",
+        "--glob",
+    ]
+    .map(String::from)
+    .to_vec();
     if let Some(kind) = kind {
         out.extend(["--type".into(), kind.clone()]);
     }

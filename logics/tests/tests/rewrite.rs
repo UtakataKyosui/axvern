@@ -107,6 +107,7 @@ fn only_listed_rules_rewrite_verified_forms() {
             vec![
                 "--hidden",
                 "--no-ignore",
+                "--case-sensitive",
                 "--color=never",
                 "--glob",
                 "--",
@@ -121,6 +122,7 @@ fn only_listed_rules_rewrite_verified_forms() {
             vec![
                 "--hidden",
                 "--no-ignore",
+                "--case-sensitive",
                 "--color=never",
                 "--glob",
                 "--type",
@@ -137,6 +139,7 @@ fn only_listed_rules_rewrite_verified_forms() {
             vec![
                 "--hidden",
                 "--no-ignore",
+                "--case-sensitive",
                 "--color=never",
                 "--glob",
                 "--type",
@@ -456,4 +459,37 @@ fn doctor_reports_rules_and_their_dependencies() {
         // A missing target only degrades (skip mode); it never fails the report.
         assert_ne!(check.level, CheckLevel::Fail);
     }
+}
+
+#[test]
+fn find_rewrite_preserves_case_sensitive_name_matches() {
+    use std::process::Command;
+    if Command::new("fd").arg("--version").output().is_err() {
+        eprintln!("skipped: fd is required for live rewrite comparison");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["main.rs", "Main.RS", "MAIN.rs", "other.txt"] {
+        std::fs::write(dir.path().join(name), "").unwrap();
+    }
+    let mut original = plan("find", &[".", "-name", "*.rs"]);
+    original.cwd = dir.path().to_path_buf();
+    let (rewritten, _) = run(&enabled(), &original);
+    let paths = |p: &ExecutionPlan| {
+        let out = Command::new(&p.program)
+            .args(&p.args)
+            .current_dir(&p.cwd)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let text = String::from_utf8(out.stdout).unwrap();
+        let mut names: Vec<_> = text
+            .lines()
+            .map(|p| p.trim_start_matches("./").to_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(paths(&original), ["MAIN.rs", "main.rs"]);
+    assert_eq!(paths(&rewritten), paths(&original));
 }
