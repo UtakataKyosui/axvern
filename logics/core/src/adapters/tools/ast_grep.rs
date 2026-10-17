@@ -131,9 +131,6 @@ impl DiscoveryAdapter for AstGrep {
             stop: None,
         }))
     }
-    fn preflight(&self) -> Result<(), Error> {
-        require_supported(&AST_GREP)
-    }
 }
 
 /// Byte offset of the `chars`-th character of `line`, or its length when it ends there.

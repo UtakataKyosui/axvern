@@ -47,3 +47,8 @@ Without that environment, local development keeps explicit optional skips.
 See the [v0.2 acceptance matrix](../sites/axvern-document-site/docs/en/release.md)
 for fixture/live coverage and the outstanding undefined AC IDs. Optional
 eza/git/delta/dust/procs are outside the required tool set.
+
+The [modern CLI compatibility contract](evidence/17-modern-cli.md) maps each
+adapter and boundary to executable coverage. CI measures optional eza 0.23.5 in
+a separate display-only spike after the required gate has run without it;
+`AXVERN_REQUIRE_EZA_SPIKE=1` prevents that dedicated step from silently skipping.

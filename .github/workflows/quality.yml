@@ -130,6 +130,27 @@ jobs:
           if [[ "$CHECK_LINKS" == true && -f qualities/scripts/check_links.py ]]; then
             python3 qualities/scripts/check_links.py 2>&1 | tee -a target/quality.log
           fi
+      # The required discovery gate above runs without optional eza. Measure its
+      # display-only replacement separately; no structured discovery uses it.
+      - uses: actions/cache@v4
+        id: eza
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          path: ${{ runner.temp }}/eza
+          key: eza-v1-${{ runner.os }}-${{ runner.arch }}-0.23.5-rust1.98.0
+      - name: Install optional display spike CLI
+        if: needs.changes.outputs.rust == 'true' && steps.eza.outputs.cache-hit != 'true'
+        run: cargo install eza --version 0.23.5 --locked --root "$RUNNER_TEMP/eza"
+      - name: Measure optional eza display through Policy and Pueue
+        if: needs.changes.outputs.rust == 'true'
+        shell: bash
+        env:
+          AXVERN_REQUIRE_EZA_SPIKE: '1'
+          AXVERN_TEST_BIN: ${{ github.workspace }}/target/debug/axvern
+        run: |
+          export PATH="$RUNNER_TEMP/eza/bin:$PATH"
+          set -o pipefail
+          cargo test -p axvern-tests --locked --test tools_live -- --nocapture 2>&1 | tee -a target/quality.log
       - if: always()
         uses: actions/upload-artifact@v4
         with:

@@ -15,6 +15,8 @@ These commands are implemented in the source checkout. They validate inputs and 
 
 Pueue/client and daemon must be 4.0.4. `doctor --scope discovery` reports missing, unsupported and incapable builds. A version range is not evidence that every later release was tested. eza is optional: its display text cannot safely represent structured entries, so `fs list` uses fd. git/delta/dust/procs are optional, unprovided integrations and do not block the discovery gate.
 
+Every discovery adapter checks its version before registration, using the same capability detector as doctor. An unsupported version, failed/unrecognized version probe, or tokei build without JSON support is refused with `unsupported_tool_capability`; a probe timeout does not authorize execution. Optional eza display support is diagnosed from 0.23.5 (the measured version); missing or incompatible eza produces a warning and does not block structured discovery.
+
 Add exact backend program rules to your [private configuration](/configuration) when noninteractive discovery is intended:
 
 ```toml
