@@ -129,14 +129,15 @@ pub enum ToolStatus {
     LacksFeature(String),
     Supported(String),
 }
-/// First `x.y.z` token of a `--version` output.
+/// First `x.y.z` token of a `--version` output, retaining a suffix so capability
+/// validation rejects prereleases instead of treating them as stable releases.
 pub fn version_token(bytes: &[u8]) -> Option<String> {
     std::str::from_utf8(bytes)
         .ok()?
         .split_ascii_whitespace()
         .find_map(|word| {
-            let version = word.strip_prefix('v').unwrap_or(word).split('-').next()?;
-            let parts: Vec<_> = version.split('.').collect();
+            let version = word.strip_prefix('v').unwrap_or(word);
+            let parts: Vec<_> = version.split('-').next()?.split('.').collect();
             (parts.len() == 3
                 && parts.iter().all(|p| {
                     !p.is_empty() && p.len() <= 8 && p.bytes().all(|b| b.is_ascii_digit())

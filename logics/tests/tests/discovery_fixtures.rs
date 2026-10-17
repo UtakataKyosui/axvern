@@ -541,6 +541,18 @@ fn tool_versions_are_classified_against_the_supported_range() {
         ToolStatus::Unsupported("9.0.0".into())
     );
     assert!(FD.supported_range().contains("tested 10.5.0"));
+    for prerelease in ["10.0.0-rc.1", "10.5.0-beta.1"] {
+        let output = format!("fd {prerelease}\n");
+        let version = version_token(output.as_bytes()).unwrap();
+        assert_eq!(
+            version, prerelease,
+            "retain the suffix for capability validation"
+        );
+        assert_eq!(
+            classify_version(&FD, &version),
+            ToolStatus::Unsupported(prerelease.into())
+        );
+    }
     for invalid in ["10.bad.0.0", "10.0.0.0", "10.0", "4294967296.0.0"] {
         assert!(
             matches!(classify_version(&FD, invalid), ToolStatus::Unsupported(_)),

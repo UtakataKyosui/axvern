@@ -388,6 +388,7 @@ fn analyze_is_validated_and_refused_before_any_child_is_registered() {
 
 #[test]
 fn all_discovery_adapters_verify_versions_before_registration_like_doctor() {
+    use axvern_core::adapters::tools;
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().canonicalize().unwrap();
     fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
@@ -402,21 +403,25 @@ fn all_discovery_adapters_verify_versions_before_registration_like_doctor() {
         )).unwrap();
         fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
     };
-    for (name, version, args) in [
-        ("fd", "fd 10.5.0", vec!["fs", "list"]),
-        ("rg", "ripgrep 15.2.0", vec!["fs", "search", "x"]),
-        ("bat", "bat 0.26.1", vec!["fs", "read", "a.rs"]),
+    for (spec, version, args) in [
+        (&tools::FD, "fd 10.5.0", vec!["fs", "list"]),
+        (&tools::RG, "ripgrep 15.2.0", vec!["fs", "search", "x"]),
+        (&tools::BAT, "bat 0.26.1", vec!["fs", "read", "a.rs"]),
         (
-            "ast-grep",
+            &tools::AST_GREP,
             "ast-grep 0.51.0",
             vec!["code", "search", "--pattern", "x", "--lang", "rust"],
         ),
         (
-            "tokei",
+            &tools::TOKEI,
             "tokei 15.0.0 compiled with serialization support: json",
             vec!["code", "stats"],
         ),
     ] {
+        let name = spec.name;
+        let [a, b, c] = spec.min_version;
+        let prerelease =
+            format!("{name} {a}.{b}.{c}-rc.1 compiled with serialization support: json");
         let config = config(
             &dir,
             &format!(
@@ -424,7 +429,12 @@ fn all_discovery_adapters_verify_versions_before_registration_like_doctor() {
                 serde_json::to_string(&store).unwrap()
             ),
         );
-        for (output, exit) in [("0.0.0", 0), ("unrecognized version", 0), (version, 1)] {
+        for (output, exit) in [
+            ("0.0.0", 0),
+            ("unrecognized version", 0),
+            (version, 1),
+            (prerelease.as_str(), 0),
+        ] {
             make_tool(name, output, exit);
             let (code, json) = cli(&dir, &config, Some(&bin), &args);
             assert_eq!(
@@ -440,7 +450,11 @@ fn all_discovery_adapters_verify_versions_before_registration_like_doctor() {
             assert!(!ran.exists(), "only the read-only version probe may run");
         }
         // Diagnosis and preflight share the same ToolSpec and supported-version decision.
-        for (output, expected) in [("0.0.0", "fail"), (version, "pass")] {
+        for (output, expected) in [
+            ("0.0.0", "fail"),
+            (prerelease.as_str(), "fail"),
+            (version, "pass"),
+        ] {
             make_tool(name, output, 0);
             let (_, json) = cli(
                 &dir,
