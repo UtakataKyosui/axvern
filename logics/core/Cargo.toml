@@ -12,6 +12,7 @@ toml.workspace = true
 directories.workspace = true
 regex.workspace = true
 globset.workspace = true
+ignore.workspace = true
 
 [lints]
 workspace = true

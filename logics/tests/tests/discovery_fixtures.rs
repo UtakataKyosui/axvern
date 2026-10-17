@@ -82,7 +82,7 @@ fn plans_are_plain_argv_with_pagers_and_color_disabled() {
     assert_eq!(list.program, "fd");
     assert!(a.windows(2).any(|w| w == ["--color", "never"]));
     assert!(a.contains(&"--print0".to_owned()) && a.contains(&"--hidden".to_owned()));
-    assert!(!a.contains(&"--no-ignore".to_owned()));
+    assert!(a.contains(&"--no-ignore".to_owned()));
     assert!(!a.contains(&"--no-require-git".to_owned()));
     // Outside a repository only ignore files below the root apply.
     let outside = tools::adapter(&DiscoveryJob::List(ListJob {
@@ -94,7 +94,7 @@ fn plans_are_plain_argv_with_pagers_and_color_disabled() {
     }))
     .plan()
     .unwrap();
-    assert!(args(&outside).contains(&"--no-ignore-parent".to_owned()));
+    assert!(args(&outside).contains(&"--no-ignore".to_owned()));
 
     let read = tools::adapter(&DiscoveryJob::Read(ReadJob {
         path: "/r/-weird file.txt".into(),
@@ -541,4 +541,184 @@ fn tool_versions_are_classified_against_the_supported_range() {
         ToolStatus::Unsupported("9.0.0".into())
     );
     assert!(FD.supported_range().contains("tested 10.5.0"));
+}
+
+#[test]
+fn fd_uses_only_gitignore_with_nested_negations_and_explicit_roots() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    fs::create_dir_all(root.join(".git/info")).unwrap();
+    fs::create_dir_all(root.join("src/sub")).unwrap();
+    fs::create_dir_all(root.join("build")).unwrap();
+    fs::write(temp.path().join(".gitignore"), "parent-only\n").unwrap();
+    fs::write(root.join(".gitignore"), "*.log\n!keep.log\nbuild/\n").unwrap();
+    fs::write(root.join(".git/info/exclude"), "personal\n").unwrap();
+    fs::write(root.join(".ignore"), "dot-only\n").unwrap();
+    fs::write(root.join(".fdignore"), "fd-only\n").unwrap();
+    fs::write(root.join("src/.gitignore"), "!nested.log\nsub/\n").unwrap();
+    fs::write(root.join("src/sub/.gitignore"), "!child\n").unwrap();
+    let names = [
+        "parent-only",
+        "personal",
+        "dot-only",
+        "fd-only",
+        "drop.log",
+        "keep.log",
+        "src/drop.log",
+        "src/nested.log",
+        "src/sub/child",
+        "build/out",
+    ];
+    for name in names {
+        fs::write(root.join(name), "x").unwrap();
+    }
+    let bytes = names.join("\0") + "\0";
+    let paths = |outcome: DiscoveryOutcome| {
+        outcome
+            .document
+            .items
+            .into_iter()
+            .map(|item| {
+                let DiscoveryItem::Entry(entry) = item else {
+                    panic!()
+                };
+                entry.path
+            })
+            .collect::<Vec<_>>()
+    };
+    let normal = run(
+        &list_job(root.to_str().unwrap()),
+        &[bytes.as_bytes()],
+        ok(0),
+        b"",
+    );
+    assert!(normal.document.errors.is_empty());
+    assert_eq!(
+        paths(normal),
+        [
+            "dot-only",
+            "fd-only",
+            "keep.log",
+            "parent-only",
+            "personal",
+            "src/nested.log"
+        ]
+    );
+    let mut all = match list_job(root.to_str().unwrap()) {
+        DiscoveryJob::List(job) => job,
+        _ => unreachable!(),
+    };
+    all.include_ignored = true;
+    assert_eq!(
+        paths(run(
+            &DiscoveryJob::List(all),
+            &[bytes.as_bytes()],
+            ok(0),
+            b""
+        ))
+        .len(),
+        names.len()
+    );
+    // Selecting an ignored directory explicitly permits its contents.
+    assert_eq!(
+        paths(run(
+            &list_job(root.join("build").to_str().unwrap()),
+            &[b"out\0"],
+            ok(0),
+            b""
+        )),
+        ["out"]
+    );
+    // Parent repository rules still apply when starting within a subtree.
+    assert_eq!(
+        paths(run(
+            &list_job(root.join("src").to_str().unwrap()),
+            &[b"drop.log\0nested.log\0sub/child\0"],
+            ok(0),
+            b""
+        )),
+        ["nested.log"]
+    );
+    // Outside a repository, rules above the explicit root do not participate.
+    fs::remove_dir_all(root.join(".git")).unwrap();
+    let mut outside = match list_job(root.to_str().unwrap()) {
+        DiscoveryJob::List(job) => job,
+        _ => unreachable!(),
+    };
+    outside.in_repo = false;
+    assert_eq!(
+        paths(run(
+            &DiscoveryJob::List(outside),
+            &[b"parent-only\0"],
+            ok(0),
+            b""
+        )),
+        ["parent-only"]
+    );
+}
+
+#[test]
+fn live_fd_does_not_apply_personal_excludes() {
+    use std::process::Command;
+    if Command::new("fd").arg("--version").output().is_err() {
+        eprintln!("skipped: fd is required for live ignore comparison");
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir_all(root.join(".git/info")).unwrap();
+    fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::write(root.join(".gitignore"), "tracked-ignore\n").unwrap();
+    fs::write(root.join(".git/info/exclude"), "local-only\n").unwrap();
+    fs::write(root.join(".fdignore"), "fd-only\n").unwrap();
+    fs::write(root.join(".ignore"), "dot-only\n").unwrap();
+    for name in ["tracked-ignore", "local-only", "fd-only", "dot-only"] {
+        fs::write(root.join(name), "x").unwrap();
+    }
+    let job = list_job(root.to_str().unwrap());
+    let plan = tools::adapter(&job).plan().unwrap();
+    let output = Command::new(&plan.program)
+        .args(&plan.args)
+        .current_dir(&plan.cwd)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let result = run(&job, &[&output.stdout], ok(0), &output.stderr);
+    assert!(result.document.errors.is_empty());
+    let paths: Vec<_> = result
+        .document
+        .items
+        .iter()
+        .map(|item| {
+            let DiscoveryItem::Entry(e) = item else {
+                panic!()
+            };
+            e.path.as_str()
+        })
+        .collect();
+    for name in ["local-only", "fd-only", "dot-only"] {
+        assert!(paths.contains(&name));
+    }
+    assert!(!paths.contains(&"tracked-ignore"));
+    assert!(!paths.iter().any(|p| p.starts_with(".git/")));
+}
+
+#[test]
+fn fd_reports_unreadable_ignore_rules_and_suppresses_errors_in_excluded_dirs() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
+    fs::write(root.join("ok"), "x").unwrap();
+    let result = run(
+        &list_job(root.to_str().unwrap()),
+        &[b"ok\0"],
+        ok(0),
+        b"[fd error]: ./ignored: Permission denied (os error 13)\n",
+    );
+    assert!(result.document.errors.is_empty());
+    fs::remove_file(root.join(".gitignore")).unwrap();
+    fs::create_dir(root.join(".gitignore")).unwrap();
+    let result = run(&list_job(root.to_str().unwrap()), &[b"ok\0"], ok(0), b"");
+    assert!(result.document.completeness.partial);
+    assert_eq!(result.document.errors[0].code, ErrorCode::PartialResult);
 }

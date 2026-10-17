@@ -17,3 +17,19 @@ Date: 2026-10-16. Platform: macOS arm64. fd 10.5.0, ripgrep 15.2.0, bat 0.26.1, 
 - `logics/tests/tests/discovery_cli.rs`: input, target, policy and missing-tool refusals before registration.
 - `logics/tests/tests/discovery_live.rs`: real fd/rg/bat through an isolated Pueue daemon; skipped when a tool is missing.
 - The Mojo contract evaluator cases and error-code table were updated but not executed here (Mojo is not installed).
+
+## Review follow-up: isolate ignore sources
+
+`fd` now runs with `--no-ignore`; the normalizer applies only `.gitignore` using
+`ignore::gitignore`. Repository-root ancestor rules and nested negations are
+preserved; global ignore, `.git/info/exclude`, `.ignore` and `.fdignore` cannot
+hide entries. Outside a repository, only rules at/below the explicit root apply.
+Explicit ignored roots remain usable; descendant symlinks are not followed.
+Unreadable or malformed ignore files produce a partial result, not silent omission.
+
+This filters fd candidates rather than pruning its traversal. Candidates under
+ignored directories therefore also consume `max_entries`; fd's depth limit,
+worker timeout, item and artifact limits remain in force. Permission errors
+inside ignored directories do not make the visible scope partial.
+Regression fixtures cover personal excludes, parent scope, nested negation,
+excluded parent directories, explicit ignored roots and `--include-ignored`.
