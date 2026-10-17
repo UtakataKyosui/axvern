@@ -1,4 +1,7 @@
 //! Shared contracts. Native argv stays native until an explicitly checked JSON boundary.
+mod discovery;
+pub use discovery::*;
+
 use serde::{Deserialize, Serialize};
 use std::{ffi::OsString, fmt, path::PathBuf, str::FromStr};
 
@@ -157,6 +160,10 @@ pub enum ErrorCode {
     StoreFailure,
     Expired,
     InvalidInput,
+    InvalidPattern,
+    InvalidTarget,
+    TargetNotFound,
+    UnsupportedEncoding,
     InvalidEncoding,
     InvalidConfig,
     PermissionDenied,

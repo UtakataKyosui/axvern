@@ -156,24 +156,16 @@ impl ExecutionService {
         runner: &Path,
         plan: &ExecutionPlan,
         id: &ExecutionId,
+        job: Option<&DiscoveryJob>,
     ) -> Result<ExecutionPlan, Error> {
-        JsonExecutionPlan::try_from(plan)?;
-        let mut args = vec![
-            "__axvern_worker".into(),
-            self.store.root.as_os_str().into(),
-            id.to_string().into(),
-            self.config.results.retention_seconds.to_string().into(),
-            self.config.results.capacity_bytes.to_string().into(),
-            self.config.results.max_artifact_bytes.to_string().into(),
-            "--".into(),
-            plan.program.clone(),
-        ];
-        args.extend(plan.args.clone());
-        Ok(ExecutionPlan {
-            program: runner.as_os_str().into(),
-            args,
-            cwd: plan.cwd.clone(),
-        })
+        worker_plan(
+            runner,
+            &self.store.root,
+            &self.config.results,
+            plan,
+            id,
+            job,
+        )
     }
     pub fn run_captured(
         &mut self,
@@ -198,6 +190,32 @@ impl ExecutionService {
         interactive: bool,
         approval: Approval,
     ) -> Result<ExecutionRecord, crate::store::RegistrationFailure> {
+        self.run_planned_job(runner, planned, None, interactive, approval)
+    }
+    pub fn run_captured_job(
+        &mut self,
+        runner: &Path,
+        plan: &ExecutionPlan,
+        job: Option<&DiscoveryJob>,
+        interactive: bool,
+        approval: Approval,
+    ) -> Result<ExecutionRecord, RegistrationFailure> {
+        self.run_planned_job(
+            runner,
+            &Planned::unchanged(plan.clone()),
+            job,
+            interactive,
+            approval,
+        )
+    }
+    pub fn run_planned_job(
+        &mut self,
+        runner: &Path,
+        planned: &Planned,
+        job: Option<&DiscoveryJob>,
+        interactive: bool,
+        approval: Approval,
+    ) -> Result<ExecutionRecord, RegistrationFailure> {
         let fail = |error| crate::store::RegistrationFailure {
             error,
             receipt: None,
@@ -206,7 +224,7 @@ impl ExecutionService {
         planner::authorize(&self.config, planned, interactive, approval).map_err(fail)?;
         let id = ExecutionStore::allocate_id().map_err(fail)?;
         let worker = self
-            .worker_plan(runner, &planned.executable, &id)
+            .worker_plan(runner, &planned.executable, &id, job)
             .map_err(fail)?;
         let check_adapter = self.adapter.clone();
         let registration = self.store.register_intent_rewritten(
@@ -394,4 +412,45 @@ impl ExecutionService {
             })
             .collect()
     }
+}
+
+/// The argv Pueue runs: the internal runner, then the target exactly as Policy judged it.
+/// A discovery `job` selects the runner that normalizes and stores structured results.
+pub fn worker_plan(
+    runner: &Path,
+    store_root: &Path,
+    settings: &crate::config::Results,
+    plan: &ExecutionPlan,
+    id: &ExecutionId,
+    job: Option<&DiscoveryJob>,
+) -> Result<ExecutionPlan, Error> {
+    JsonExecutionPlan::try_from(plan)?;
+    let mut args = vec![
+        if job.is_some() {
+            "__axvern_discovery"
+        } else {
+            "__axvern_worker"
+        }
+        .into(),
+        store_root.as_os_str().into(),
+        id.to_string().into(),
+        settings.retention_seconds.to_string().into(),
+        settings.capacity_bytes.to_string().into(),
+        settings.max_artifact_bytes.to_string().into(),
+    ];
+    if let Some(job) = job {
+        args.push(
+            serde_json::to_string(job)
+                .map_err(|_| Error::new(ErrorCode::InvalidInput, "job cannot be encoded"))?
+                .into(),
+        );
+    }
+    args.push("--".into());
+    args.push(plan.program.clone());
+    args.extend(plan.args.clone());
+    Ok(ExecutionPlan {
+        program: runner.as_os_str().into(),
+        args,
+        cwd: plan.cwd.clone(),
+    })
 }

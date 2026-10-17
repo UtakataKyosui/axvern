@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -38,10 +38,16 @@ pub struct Manifest {
     pub state: Option<ChildState>,
     pub exit_code: Option<i32>,
     pub availability: String,
+    /// `run` stores raw combined output; other kinds store a `DiscoveryDocument`.
+    #[serde(default = "run_kind")]
+    pub kind: String,
     reserved_bytes: u64,
     bytes: u64,
     truncated: bool,
     pub error: Option<Error>,
+}
+fn run_kind() -> String {
+    "run".into()
 }
 fn private(path: &Path, directory: bool) -> Result<(), Error> {
     let m = io(path.symlink_metadata())?;
@@ -245,6 +251,7 @@ pub fn reserve(
         state: None,
         exit_code: None,
         availability: "pending".into(),
+        kind: run_kind(),
         reserved_bytes: budget,
         bytes: 0,
         truncated: false,
@@ -292,18 +299,16 @@ fn drain(mut stream: impl Read, capture: Arc<Mutex<Capture>>) {
         }
     }
 }
-/// Called only by the internal runner registered with Pueue. No new Pueue tasks.
-pub fn run_worker(
+/// Reserve capacity for the worker's result. When that fails the task has been submitted but
+/// no target process starts, so keep a typed explanation whenever metadata can still be published.
+pub(crate) fn reserve_or_record(
     store: &ExecutionStore,
     settings: &Results,
     id: &ExecutionId,
-    plan: &ExecutionPlan,
-) -> Result<i32, Error> {
-    let (mut m, file) = match reserve(store, settings, id) {
-        Ok(reservation) => reservation,
+) -> Result<(Manifest, File), Error> {
+    match reserve(store, settings, id) {
+        Ok(reservation) => Ok(reservation),
         Err(error) => {
-            // The task was submitted, but no target process has been started.
-            // Keep a typed explanation whenever metadata can still be published.
             if let Ok(_lock) = store.lock()
                 && let Ok(dir) = directory(store)
                 && read(&dir, id)?.is_none()
@@ -315,6 +320,7 @@ pub fn run_worker(
                     state: Some(ChildState::Failed),
                     exit_code: None,
                     availability: "unavailable".into(),
+                    kind: run_kind(),
                     reserved_bytes: 0,
                     bytes: 0,
                     truncated: false,
@@ -322,9 +328,75 @@ pub fn run_worker(
                 };
                 let _ = publish(&dir, &unavailable);
             }
-            return Err(error);
+            Err(error)
         }
-    };
+    }
+}
+/// Make a finished spool the immutable artifact and publish its manifest.
+pub(crate) fn publish_available(
+    store: &ExecutionStore,
+    id: &ExecutionId,
+    m: &mut Manifest,
+    bytes: u64,
+    truncated: bool,
+) -> Result<(), Error> {
+    m.bytes = bytes;
+    m.truncated = truncated;
+    m.availability = "available".into();
+    let _lock = store.lock()?;
+    let dir = directory(store)?;
+    io(fs::rename(
+        dir.join(format!("{id}.spool")),
+        dir.join(format!("{id}.output")),
+    ))?;
+    publish(&dir, m)
+}
+/// Every failure after the target completed must preserve the target's actual status and
+/// expose a separate store error.
+pub(crate) fn record_persistence_failure(
+    store: &ExecutionStore,
+    id: &ExecutionId,
+    m: &mut Manifest,
+    error: Error,
+) {
+    m.availability = "unavailable".into();
+    m.error = Some(error);
+    m.reserved_bytes = 0;
+    m.bytes = 0;
+    if let Ok(_lock) = store.lock()
+        && let Ok(dir) = directory(store)
+        && publish(&dir, m).is_ok()
+    {
+        for extension in ["spool", "output"] {
+            let path = dir.join(format!("{id}.{extension}"));
+            if path.symlink_metadata().is_ok() && private(&path, false).is_ok() {
+                let _ = fs::remove_file(path);
+            }
+        }
+        let _ = File::open(&dir).and_then(|f| f.sync_all());
+    }
+    eprintln!("result persistence failed; target exit status preserved");
+}
+impl Manifest {
+    /// Record the target's final status; `kind` selects how the artifact is read back.
+    pub(crate) fn complete(&mut self, kind: &str, state: ChildState, exit_code: Option<i32>) {
+        self.kind = kind.into();
+        self.finished_at = Some(now());
+        self.state = Some(state);
+        self.exit_code = exit_code;
+    }
+    pub(crate) fn reserved(&self) -> u64 {
+        self.reserved_bytes
+    }
+}
+/// Called only by the internal runner registered with Pueue. No new Pueue tasks.
+pub fn run_worker(
+    store: &ExecutionStore,
+    settings: &Results,
+    id: &ExecutionId,
+    plan: &ExecutionPlan,
+) -> Result<i32, Error> {
+    let (mut m, file) = reserve_or_record(store, settings, id)?;
     let capture = Arc::new(Mutex::new(Capture {
         file,
         kept: 0,
@@ -395,37 +467,12 @@ pub fn run_worker(
         }
         // Include trailing UTF-8 trimming in the durability barrier.
         io(c.file.sync_all())?;
-        m.bytes = c.kept;
-        m.truncated = c.truncated;
-        m.availability = "available".into();
-        let _lock = store.lock()?;
-        let dir = directory(store)?;
-        io(fs::rename(
-            dir.join(format!("{id}.spool")),
-            dir.join(format!("{id}.output")),
-        ))?;
-        publish(&dir, &m)
+        let (kept, truncated) = (c.kept, c.truncated);
+        drop(c);
+        publish_available(store, id, &mut m, kept, truncated)
     })();
     if let Err(error) = saved {
-        // Every failure after target completion, including trimming/fsync, must
-        // preserve the target's actual status and expose a separate store error.
-        m.availability = "unavailable".into();
-        m.error = Some(error);
-        m.reserved_bytes = 0;
-        m.bytes = 0;
-        if let Ok(_lock) = store.lock()
-            && let Ok(dir) = directory(store)
-            && publish(&dir, &m).is_ok()
-        {
-            for extension in ["spool", "output"] {
-                let path = dir.join(format!("{id}.{extension}"));
-                if path.symlink_metadata().is_ok() && private(&path, false).is_ok() {
-                    let _ = fs::remove_file(path);
-                }
-            }
-            let _ = File::open(&dir).and_then(|f| f.sync_all());
-        }
-        eprintln!("result persistence failed; target exit status preserved");
+        record_persistence_failure(store, id, &mut m, error);
     }
     Ok(exit)
 }
@@ -505,6 +552,10 @@ pub fn page(
             Some(m.clone()),
             json!({"result_availability":m.availability,"result":null,"result_error":m.error}),
         ));
+    }
+    if m.kind != "run" {
+        let output = structured_page(&dir, &m, start, index, limit, max_bytes)?;
+        return Ok((Some(m), output));
     }
     if start > m.bytes {
         return Err(Error::new(ErrorCode::InvalidCursor, "invalid cursor"));
@@ -602,4 +653,102 @@ fn fits_page(m: &Manifest, output: &Value, max_bytes: usize) -> Result<bool, Err
     response.state = m.state.map(Into::into);
     response.exit_code = m.exit_code;
     Ok(serde_json::to_vec(&response).map_err(|_| failure())?.len() < max_bytes)
+}
+
+/// Discovery artifacts hold one header line (summary, completeness, issues) followed by one
+/// JSON line per item. A cursor is the byte offset of the next item line.
+fn structured_page(
+    dir: &Path,
+    m: &Manifest,
+    start: u64,
+    mut index: u64,
+    limit: usize,
+    max_bytes: usize,
+) -> Result<Value, Error> {
+    let invalid = || Error::new(ErrorCode::InvalidCursor, "invalid cursor");
+    let path = dir.join(format!("{}.output", m.execution_id));
+    private(&path, false)?;
+    let mut reader = BufReader::new(io(File::open(path))?);
+    let mut header = Vec::new();
+    io(reader.read_until(b'\n', &mut header))?;
+    let head: Value = serde_json::from_slice(&header).map_err(|_| failure())?;
+    let header_len = header.len() as u64;
+    let mut position = header_len;
+    if start != 0 {
+        if start < header_len || start > m.bytes {
+            return Err(invalid());
+        }
+        let mut previous = [0];
+        io(reader.seek(SeekFrom::Start(start - 1)))?;
+        io(reader.read_exact(&mut previous))?;
+        if previous[0] != b'\n' {
+            return Err(invalid());
+        }
+        position = start;
+    }
+    io(reader.seek(SeekFrom::Start(position)))?;
+    // The envelope carries a longer command name than the one measured here.
+    let budget = max_bytes.saturating_sub(16);
+    let mut items = Vec::new();
+    while position < m.bytes && items.len() < limit {
+        let mut line = Vec::new();
+        let n = io(reader.read_until(b'\n', &mut line))? as u64;
+        if n == 0 {
+            return Err(failure());
+        }
+        items.push(serde_json::from_slice::<Value>(&line).map_err(|_| failure())?);
+        if !fits_page(
+            m,
+            &structured_output(m, &head, &items, position + n, index + 1),
+            budget,
+        )? {
+            items.pop();
+            break;
+        }
+        position += n;
+        index += 1;
+    }
+    if items.is_empty() && position < m.bytes {
+        return Err(Error::new(
+            ErrorCode::OutputLimitTooSmall,
+            "output limit too small",
+        ));
+    }
+    let output = structured_output(m, &head, &items, position, index);
+    if !fits_page(m, &output, budget)? {
+        return Err(Error::new(
+            ErrorCode::OutputLimitTooSmall,
+            "output limit too small",
+        ));
+    }
+    Ok(output)
+}
+fn structured_output(
+    m: &Manifest,
+    head: &Value,
+    items: &[Value],
+    position: u64,
+    index: u64,
+) -> Value {
+    json!({"result_availability":"available", "result":{"kind":m.kind, "summary":head["summary"], "items":items,
+        "completeness":head["completeness"], "errors":head["errors"], "warnings":head["warnings"],
+        "page":{"has_more":position<m.bytes,"next_cursor":if position<m.bytes { Some(cursor(&m.execution_id,position,index)) } else { None }}}})
+}
+/// Serialized form of a discovery document: header line, then one line per item.
+pub(crate) fn encode_document(doc: &DiscoveryDocument) -> Result<(Vec<u8>, Vec<Vec<u8>>), Error> {
+    let line = |value: Value| -> Result<Vec<u8>, Error> {
+        let mut bytes = serde_json::to_vec(&value).map_err(|_| failure())?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    };
+    let header = line(json!({
+        "summary": doc.summary, "completeness": doc.completeness,
+        "errors": doc.errors, "warnings": doc.warnings,
+    }))?;
+    let items = doc
+        .items
+        .iter()
+        .map(|item| line(serde_json::to_value(item).map_err(|_| failure())?))
+        .collect::<Result<_, _>>()?;
+    Ok((header, items))
 }

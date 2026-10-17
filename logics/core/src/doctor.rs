@@ -1,6 +1,9 @@
 //! Read-only diagnosis. Every wait, including store contention, shares one deadline.
 use crate::{
-    adapters::pueue::probe,
+    adapters::{
+        pueue::probe,
+        tools::{self, ToolSpec, ToolStatus, version_token},
+    },
     config::{Config, MissingTool, Replacement},
     rewrite::{RULES, rule},
     services,
@@ -51,19 +54,60 @@ fn remaining(deadline: Instant) -> Result<Duration, Error> {
         Ok(remaining.min(Duration::from_secs(5)))
     }
 }
-fn version_token(bytes: &[u8]) -> Option<String> {
-    std::str::from_utf8(bytes)
-        .ok()?
-        .split_ascii_whitespace()
-        .find_map(|word| {
-            let version = word.strip_prefix('v').unwrap_or(word).split('-').next()?;
-            let parts: Vec<_> = version.split('.').collect();
-            (parts.len() == 3
-                && parts.iter().all(|p| {
-                    !p.is_empty() && p.len() <= 8 && p.bytes().all(|b| b.is_ascii_digit())
-                }))
-            .then(|| version.to_owned())
-        })
+/// A tool with a provided adapter: pass only when installed at a supported version.
+fn adapter_tool(spec: &ToolSpec, deadline: Instant) -> Diagnostic {
+    let status = remaining(deadline)
+        .map(|timeout| tools::detect(spec, timeout))
+        .unwrap_or(ToolStatus::Unknown);
+    let (installed, version, level, message) = match &status {
+        ToolStatus::Supported(v) => (
+            Some(true),
+            Some(v.clone()),
+            CheckLevel::Pass,
+            "available".to_owned(),
+        ),
+        ToolStatus::Unsupported(v) => (
+            Some(true),
+            Some(v.clone()),
+            CheckLevel::Fail,
+            format!("unsupported tool capability: {} {v}", spec.name),
+        ),
+        ToolStatus::Missing => (
+            Some(false),
+            None,
+            CheckLevel::Fail,
+            format!("missing tool: {} is not installed", spec.name),
+        ),
+        ToolStatus::Unknown => (
+            None,
+            None,
+            CheckLevel::Fail,
+            format!(
+                "{} was not checked: probe failed or deadline reached",
+                spec.name
+            ),
+        ),
+    };
+    Diagnostic {
+        name: spec.name.into(),
+        level,
+        message,
+        remedy: (level != CheckLevel::Pass).then(|| {
+            format!(
+                "install {} {} and put it on PATH",
+                spec.name,
+                spec.supported_range()
+            )
+        }),
+        tool: Some(ToolDiagnostic {
+            installed,
+            version,
+            supported_versions: vec![spec.supported_range()],
+            feature_available: level == CheckLevel::Pass,
+            purpose: spec.purpose.into(),
+            dependencies: vec!["pueue 4.0.4".into()],
+        }),
+    }
 }
 fn future_tool(name: &str, purpose: &str, required: bool, deadline: Instant) -> Diagnostic {
     let result =
@@ -252,11 +296,16 @@ pub fn diagnose_scope_with_timeout(
         }
     }
     if matches!(scope, "discovery" | "all") {
+        for spec in [&tools::FD, &tools::RG, &tools::BAT] {
+            checks.push(adapter_tool(spec, deadline));
+        }
+        checks.push(future_tool(
+            "eza",
+            "directory display; fs list reads entries through fd",
+            false,
+            deadline,
+        ));
         for (tool, purpose) in [
-            ("eza", "filesystem tree"),
-            ("fd", "file discovery"),
-            ("rg", "text search"),
-            ("bat", "file rendering"),
             ("ast-grep", "structural code search"),
             ("tokei", "language statistics"),
         ] {
