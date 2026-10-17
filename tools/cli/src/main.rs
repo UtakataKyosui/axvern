@@ -1,5 +1,8 @@
 use axvern_core::{
-    analyze, discovery, doctor, policy,
+    analyze, discovery, doctor,
+    planner::{self, Planned},
+    policy,
+    rewrite::{self, Rewrite},
     services::{self, ExecutionService},
 };
 use axvern_models::*;
@@ -437,6 +440,18 @@ fn plan(input: &Input) -> Result<ExecutionPlan, Error> {
         cwd,
     })
 }
+fn planned(config: &axvern_core::config::Config, input: &Input) -> Result<Planned, Error> {
+    planner::plan(config, plan(input)?, rewrite::on_path)
+}
+/// Surfaces a rewrite or an explicit skip; unchanged requests add nothing.
+fn with_rewrite(mut response: Response<Value>, rewrite: &Rewrite) -> Response<Value> {
+    if *rewrite != Rewrite::Unchanged
+        && let Some(output) = response.output.as_mut()
+    {
+        output["rewrite"] = serde_json::to_value(rewrite).expect("rewrite JSON");
+    }
+    response
+}
 fn approve() -> Approval {
     // Prompt contains no command arguments or config values; both terminals required.
     eprint!("Policy asks for approval. Register this command? [y/N] ");
@@ -485,25 +500,30 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
         Err(error) => return failure(error),
     };
     if input.command == "policy check" {
-        return match plan(input).and_then(|p| policy::evaluate(&config, &p)) {
-            Ok(decision) => (
-                Response::success({
-                    let mut v = serde_json::to_value(decision).expect("decision JSON");
-                    v["kind"] = json!("policy");
-                    v
-                }),
+        return match planned(&config, input).and_then(|p| Ok((planner::evaluate(&config, &p)?, p)))
+        {
+            Ok((decision, p)) => (
+                with_rewrite(
+                    Response::success({
+                        let mut v = serde_json::to_value(decision).expect("decision JSON");
+                        v["kind"] = json!("policy");
+                        v
+                    }),
+                    &p.rewrite,
+                ),
                 0,
             ),
             Err(error) => failure(error),
         };
     }
     if input.command == "run" && input.request_id.is_some() {
-        let p = match plan(input) {
+        let planned = match planned(&config, input) {
             Ok(p) => p,
             Err(e) => return failure(e),
         };
+        let p = planned.original.clone();
         // Validate encoding and limits even for a replay; evaluation never prompts.
-        if let Err(e) = policy::evaluate(&config, &p) {
+        if let Err(e) = planner::evaluate(&config, &planned) {
             return failure(e);
         }
         let mut service = match ExecutionService::new(config.clone()) {
@@ -530,7 +550,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
         match service.store.request(key, &p) {
             Ok(Some(_)) => (),
             Ok(None) => {
-                let decision = match policy::evaluate(&config, &p) {
+                let decision = match planner::evaluate(&config, &planned) {
                     Ok(d) => d,
                     Err(e) => return failure(e),
                 };
@@ -540,23 +560,30 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
             }
             Err(e) => return failure(e),
         }
-        let registration = service.store.register_request(
+        let executable = &planned.executable;
+        let registration = service.store.register_request_rewritten(
             key,
             &p,
+            planned.record().cloned(),
             || {
-                services::authorize(&config, &p, interactive, approval)?;
-                axvern_core::results::preflight_registration_locked(&service.store, &settings, &p)?;
+                planner::authorize(&config, &planned, interactive, approval)?;
+                axvern_core::results::preflight_registration_locked(
+                    &service.store,
+                    &settings,
+                    executable,
+                )?;
                 check_adapter.check()
             },
             |id| {
                 let worker =
-                    services::worker_plan(&runner, &worker_store, &settings, &p, id, None)?;
+                    services::worker_plan(&runner, &worker_store, &settings, executable, id, None)?;
                 service.adapter.register_with_label(&worker, id)
             },
         );
         return match registration {
             Ok(request) if request.record.is_some() => {
-                run_response(&service, request.record.unwrap(), input.wait)
+                let (response, code) = run_response(&service, request.record.unwrap(), input.wait);
+                (with_rewrite(response, &planned.rewrite), code)
             }
             Ok(request) => unknown_request(request.execution_id),
             Err(error) => match service.store.request(key, &p) {
@@ -574,7 +601,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
     let mut job = None;
     let run_plan = if input.command == "run" || is_discovery(&input.command) {
         let p = if input.command == "run" {
-            match plan(input) {
+            match planned(&config, input) {
                 Ok(p) => p,
                 Err(e) => return failure(e),
             }
@@ -589,23 +616,24 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
             match prepared {
                 Ok(prepared) => {
                     job = Some(prepared.job);
-                    prepared.plan
+                    Planned::unchanged(prepared.plan)
                 }
                 Err(e) => return failure(e),
             }
         };
-        let decision = match policy::evaluate(&config, &p) {
+        let decision = match planner::evaluate(&config, &p) {
             Ok(d) => d,
             Err(e) => return failure(e),
         };
         if decision.effect == PolicyEffect::Ask && interactive {
             approval = approve();
         }
-        if let Err(e) = services::authorize(&config, &p, interactive, approval) {
+        if let Err(e) = planner::authorize(&config, &p, interactive, approval) {
             return failure(e);
         }
         if job.is_some()
-            && let Err(e) = discovery::ensure_tool(job.as_ref().expect("discovery job"), &p)
+            && let Err(e) =
+                discovery::ensure_tool(job.as_ref().expect("discovery job"), &p.executable)
         {
             return failure(e);
         }
@@ -635,9 +663,12 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                     execution_id: None,
                 })
                 .and_then(|runner| {
-                    service.run_captured_job(&runner, p, job.as_ref(), interactive, approval)
+                    service.run_planned_job(&runner, p, job.as_ref(), interactive, approval)
                 }) {
-                Ok(record) => run_response(&service, record, input.wait),
+                Ok(record) => {
+                    let (response, code) = run_response(&service, record, input.wait);
+                    (with_rewrite(response, &p.rewrite), code)
+                }
                 Err(f) => {
                     let (mut response, code) = failure(f.error);
                     response.execution_id = f.execution_id;

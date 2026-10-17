@@ -106,6 +106,7 @@ impl Fixture {
                 created_at: "2026-10-16T00:00:00+09:00".into(),
             },
             registered_at: 100,
+            rewrite: None,
             cwd: plan.cwd.to_str().unwrap().into(),
         };
         self.store.save_record(&record).unwrap();
