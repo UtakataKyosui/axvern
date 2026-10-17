@@ -203,6 +203,17 @@ pub struct ExecutionRecord {
     pub backend: BackendIdentity,
     pub registered_at: u64,
     pub cwd: String,
+    /// Present only when an opt-in rule rewrote the request before registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewrite: Option<RewriteRecord>,
+}
+/// Original request, rewritten request and the rule that produced it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RewriteRecord {
+    pub rule_id: String,
+    pub original: JsonExecutionPlan,
+    pub rewritten: JsonExecutionPlan,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionView {
