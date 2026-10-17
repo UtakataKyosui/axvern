@@ -60,9 +60,6 @@ impl DiscoveryAdapter for Tokei {
             stop: None,
         }))
     }
-    fn preflight(&self) -> Result<(), Error> {
-        require_supported(&TOKEI)
-    }
 }
 
 /// One file of a `--streaming json` stream.

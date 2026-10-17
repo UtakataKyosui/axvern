@@ -541,6 +541,12 @@ fn tool_versions_are_classified_against_the_supported_range() {
         ToolStatus::Unsupported("9.0.0".into())
     );
     assert!(FD.supported_range().contains("tested 10.5.0"));
+    for invalid in ["10.bad.0.0", "10.0.0.0", "10.0", "4294967296.0.0"] {
+        assert!(
+            matches!(classify_version(&FD, invalid), ToolStatus::Unsupported(_)),
+            "{invalid}"
+        );
+    }
 }
 
 #[test]

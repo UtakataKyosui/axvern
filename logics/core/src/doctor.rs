@@ -318,12 +318,12 @@ pub fn diagnose_scope_with_timeout(
         ] {
             checks.push(adapter_tool(spec, deadline));
         }
-        checks.push(future_tool(
-            "eza",
-            "directory display; fs list reads entries through fd",
-            false,
-            deadline,
-        ));
+        let mut eza = adapter_tool(&tools::EZA, deadline);
+        // Display-only replacement remains optional for discovery.
+        if eza.level == CheckLevel::Fail {
+            eza.level = CheckLevel::Warning;
+        }
+        checks.push(eza);
     }
     if matches!(scope, "performance" | "all") {
         checks.push(future_tool(

@@ -10,7 +10,8 @@
 //! Spike facts the adapters rely on (macOS, fd 10.5.0, ripgrep 15.2.0, bat 0.26.1,
 //! ast-grep 0.51.0, tokei 15.0.0):
 //! - `fd` exits 0 on unreadable directories and only reports them with `--show-errors`;
-//!   it cannot disable `.git/info/exclude`, `.ignore` or `.fdignore`; `--full-path` matches
+//!   it cannot isolate `.gitignore` from other ignore sources, so the normalizer applies
+//!   only `.gitignore` after fd runs with `--no-ignore`; `--full-path` matches
 //!   the absolute path, so root-relative full-path matching is done by the normalizer.
 //! - `rg` exits 1 for "no match" and 2 when any file could not be read, even if it matched.
 //! - `bat` passes file bytes through unchanged (BOM, CRLF, escapes) and succeeds past EOF.
@@ -102,6 +103,15 @@ pub const TOKEI: ToolSpec = ToolSpec {
     capable: tokei::has_json,
     feature: "JSON output support",
 };
+/// Display-only dependency of the opt-in ls replacement, never a structured path source.
+pub const EZA: ToolSpec = ToolSpec {
+    name: "eza",
+    purpose: "directory display (opt-in ls replacement; structured lists use fd)",
+    min_version: [0, 23, 5],
+    tested_version: "0.23.5",
+    capable: any_build,
+    feature: "",
+};
 impl ToolSpec {
     pub fn supported_range(&self) -> String {
         let [a, b, c] = self.min_version;
@@ -135,9 +145,11 @@ pub fn version_token(bytes: &[u8]) -> Option<String> {
         })
 }
 pub fn classify_version(spec: &ToolSpec, version: &str) -> ToolStatus {
-    let parsed: Vec<u32> = version.split('.').filter_map(|p| p.parse().ok()).collect();
-    match parsed.as_slice() {
-        [a, b, c] if [*a, *b, *c] >= spec.min_version => ToolStatus::Supported(version.into()),
+    let parsed: Option<Vec<u32>> = version.split('.').map(|p| p.parse().ok()).collect();
+    match parsed.as_deref() {
+        Some([a, b, c]) if [*a, *b, *c] >= spec.min_version => {
+            ToolStatus::Supported(version.into())
+        }
         _ => ToolStatus::Unsupported(version.into()),
     }
 }
@@ -202,7 +214,7 @@ pub trait DiscoveryAdapter {
     fn normalizer(&self, byte_budget: u64) -> Result<Box<dyn Normalizer>, Error>;
     /// Checked before registration, after the program was found on `PATH`.
     fn preflight(&self) -> Result<(), Error> {
-        Ok(())
+        require_supported(self.tool())
     }
 }
 pub fn adapter(job: &DiscoveryJob) -> Box<dyn DiscoveryAdapter> {
@@ -295,7 +307,14 @@ pub(crate) fn require_supported(spec: &ToolSpec) -> Result<(), Error> {
                 spec.supported_range()
             ),
         )),
-        ToolStatus::Supported(_) | ToolStatus::Unknown => Ok(()),
+        ToolStatus::Unknown => Err(Error::new(
+            ErrorCode::UnsupportedToolCapability,
+            format!(
+                "{} capability could not be verified; version probe failed or timed out",
+                spec.name
+            ),
+        )),
+        ToolStatus::Supported(_) => Ok(()),
     }
 }
 pub(crate) fn missing_tool(spec: &ToolSpec) -> ResultIssue {

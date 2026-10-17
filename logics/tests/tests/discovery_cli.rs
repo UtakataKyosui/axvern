@@ -385,3 +385,133 @@ fn analyze_is_validated_and_refused_before_any_child_is_registered() {
     assert_eq!((code, &json["error"]["code"]), (5, &"missing_tool".into()));
     assert!(!store.exists());
 }
+
+#[test]
+fn all_discovery_adapters_verify_versions_before_registration_like_doctor() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
+    let bin = dir.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let store = dir.join("store");
+    let ran = dir.join("TARGET_RAN");
+    let make_tool = |name: &str, output: &str, exit: i32| {
+        fs::write(bin.join(name), format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{output}'; exit {exit}; fi\n: > '{}'\nexit 99\n",
+            ran.display()
+        )).unwrap();
+        fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    for (name, version, args) in [
+        ("fd", "fd 10.5.0", vec!["fs", "list"]),
+        ("rg", "ripgrep 15.2.0", vec!["fs", "search", "x"]),
+        ("bat", "bat 0.26.1", vec!["fs", "read", "a.rs"]),
+        (
+            "ast-grep",
+            "ast-grep 0.51.0",
+            vec!["code", "search", "--pattern", "x", "--lang", "rust"],
+        ),
+        (
+            "tokei",
+            "tokei 15.0.0 compiled with serialization support: json",
+            vec!["code", "stats"],
+        ),
+    ] {
+        let config = config(
+            &dir,
+            &format!(
+                "[execution]\nstore={}\n[[policy.rules]]\nid='allow'\neffect='allow'\ncommand='{name}'\n",
+                serde_json::to_string(&store).unwrap()
+            ),
+        );
+        for (output, exit) in [("0.0.0", 0), ("unrecognized version", 0), (version, 1)] {
+            make_tool(name, output, exit);
+            let (code, json) = cli(&dir, &config, Some(&bin), &args);
+            assert_eq!(
+                (code, &json["error"]["code"]),
+                (16, &"unsupported_tool_capability".into()),
+                "{name}: {output}"
+            );
+            assert_eq!(json["execution_id"], serde_json::Value::Null);
+            assert!(
+                !store.exists(),
+                "unverified tool must not reach registration"
+            );
+            assert!(!ran.exists(), "only the read-only version probe may run");
+        }
+        // Diagnosis and preflight share the same ToolSpec and supported-version decision.
+        for (output, expected) in [("0.0.0", "fail"), (version, "pass")] {
+            make_tool(name, output, 0);
+            let (_, json) = cli(
+                &dir,
+                &config,
+                Some(&bin),
+                &["doctor", "--scope", "discovery"],
+            );
+            let diagnostic = json["output"]["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == name)
+                .unwrap();
+            assert_eq!(diagnostic["level"], expected, "{name}: {output}");
+            assert_eq!(diagnostic["tool"]["installed"], true);
+            assert_eq!(diagnostic["tool"]["feature_available"], expected == "pass");
+            assert!(!ran.exists());
+        }
+        // doctor may create the private store during its storage check.
+        if store.exists() {
+            fs::remove_dir_all(&store).unwrap();
+        }
+    }
+    let config = config(&dir, "");
+    for (version, level, capable) in [("0.1.0", "warning", false), ("v0.23.5", "pass", true)] {
+        make_tool("eza", version, 0);
+        let (_, json) = cli(
+            &dir,
+            &config,
+            Some(&bin),
+            &["doctor", "--scope", "discovery"],
+        );
+        let eza = json["output"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eza")
+            .unwrap();
+        assert_eq!(eza["level"], level);
+        assert_eq!(eza["tool"]["feature_available"], capable);
+        assert!(!ran.exists());
+    }
+}
+
+#[test]
+fn a_version_probe_timeout_does_not_authorize_an_unverified_tool() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    let bin = dir.join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::write(bin.join("fd"), "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+    fs::set_permissions(bin.join("fd"), fs::Permissions::from_mode(0o755)).unwrap();
+    let store = dir.join("store");
+    let config = config(
+        &dir,
+        &format!(
+            "[execution]\nstore={}\n[[policy.rules]]\nid='allow'\neffect='allow'\ncommand='fd'\n",
+            serde_json::to_string(&store).unwrap()
+        ),
+    );
+    let started = std::time::Instant::now();
+    let (code, json) = cli(&dir, &config, Some(&bin), &["fs", "list"]);
+    assert_eq!(code, 16);
+    assert_eq!(json["error"]["code"], "unsupported_tool_capability");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("probe failed or timed out")
+    );
+    assert_eq!(json["execution_id"], serde_json::Value::Null);
+    assert!(!store.exists());
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
