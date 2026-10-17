@@ -438,10 +438,21 @@ impl ExecutionStore {
         preflight: impl FnOnce() -> Result<(), Error>,
         register: impl FnOnce(&ExecutionId) -> Result<BackendIdentity, Error>,
     ) -> Result<RequestReservation, Error> {
+        self.register_request_rewritten(key, plan, None, preflight, register)
+    }
+    /// `plan` is the request identity; `rewrite` is stored in the execution record.
+    pub fn register_request_rewritten(
+        &self,
+        key: &str,
+        plan: &ExecutionPlan,
+        rewrite: Option<RewriteRecord>,
+        preflight: impl FnOnce() -> Result<(), Error>,
+        register: impl FnOnce(&ExecutionId) -> Result<BackendIdentity, Error>,
+    ) -> Result<RequestReservation, Error> {
         let dto = JsonExecutionPlan::try_from(plan)?;
         let _lock = self.lock()?;
         let path = self.request_path(key)?;
-        self.register_locked(&path, dto, None, preflight, register)
+        self.register_locked(&path, dto, None, rewrite, preflight, register)
     }
     /// Every CLI submission reserves durable metadata capacity, including calls
     /// without a user request key. This namespace cannot collide with user keys.
@@ -449,6 +460,16 @@ impl ExecutionStore {
         &self,
         id: &ExecutionId,
         plan: &ExecutionPlan,
+        preflight: impl FnOnce() -> Result<(), Error>,
+        register: impl FnOnce(&ExecutionId) -> Result<BackendIdentity, Error>,
+    ) -> Result<RequestReservation, Error> {
+        self.register_intent_rewritten(id, plan, None, preflight, register)
+    }
+    pub fn register_intent_rewritten(
+        &self,
+        id: &ExecutionId,
+        plan: &ExecutionPlan,
+        rewrite: Option<RewriteRecord>,
         preflight: impl FnOnce() -> Result<(), Error>,
         register: impl FnOnce(&ExecutionId) -> Result<BackendIdentity, Error>,
     ) -> Result<RequestReservation, Error> {
@@ -465,6 +486,7 @@ impl ExecutionStore {
             &directory.join(format!("{id}.intent")),
             dto,
             Some(id.clone()),
+            rewrite,
             preflight,
             register,
         )
@@ -483,6 +505,7 @@ impl ExecutionStore {
         path: &Path,
         dto: JsonExecutionPlan,
         id: Option<ExecutionId>,
+        rewrite: Option<RewriteRecord>,
         preflight: impl FnOnce() -> Result<(), Error>,
         register: impl FnOnce(&ExecutionId) -> Result<BackendIdentity, Error>,
     ) -> Result<RequestReservation, Error> {
@@ -515,6 +538,7 @@ impl ExecutionStore {
                 .map_err(|_| fail())?
                 .as_secs(),
             cwd: request.plan.cwd.clone(),
+            rewrite,
         };
         self.save_record_locked(&record)?;
         request.record = Some(record);
@@ -569,6 +593,7 @@ pub fn register_and_save(
         backend,
         registered_at,
         cwd,
+        rewrite: None,
     };
     store
         .save_record(&record)

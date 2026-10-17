@@ -12,6 +12,7 @@ fn record() -> ExecutionRecord {
         },
         registered_at: 100,
         cwd: "/tmp".into(),
+        rewrite: None,
     }
 }
 fn temp() -> tempfile::TempDir {
