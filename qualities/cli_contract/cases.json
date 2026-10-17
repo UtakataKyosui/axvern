@@ -463,5 +463,80 @@
     ],
     "expected_exit": 2,
     "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-analyze-ask",
+    "args": [
+      "fs",
+      "analyze",
+      "."
+    ],
+    "expected_exit": 9,
+    "expected_error": "policy_denied"
+  },
+  {
+    "name": "fs-analyze-no-path",
+    "args": [
+      "fs",
+      "analyze"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-analyze-two-paths",
+    "args": [
+      "fs",
+      "analyze",
+      ".",
+      "."
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-analyze-depth-0",
+    "args": [
+      "fs",
+      "analyze",
+      ".",
+      "--depth",
+      "0"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-analyze-depth-33",
+    "args": [
+      "fs",
+      "analyze",
+      ".",
+      "--depth",
+      "33"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
+  },
+  {
+    "name": "fs-analyze-missing",
+    "args": [
+      "fs",
+      "analyze",
+      "no-such-directory"
+    ],
+    "expected_exit": 2,
+    "expected_error": "target_not_found"
+  },
+  {
+    "name": "fs-analyze-unknown-flag",
+    "args": [
+      "fs",
+      "analyze",
+      ".",
+      "--glob"
+    ],
+    "expected_exit": 2,
+    "expected_error": "invalid_input"
   }
 ]

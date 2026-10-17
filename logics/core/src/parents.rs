@@ -28,6 +28,22 @@ fn validate(record: &ParentRecord) -> Result<(), Error> {
     {
         return Err(failure());
     }
+    if let Some(spec) = &record.analysis {
+        let registered: Vec<_> = spec
+            .sections
+            .iter()
+            .filter_map(|s| s.execution_id.clone())
+            .collect();
+        let sections: std::collections::HashSet<_> =
+            spec.sections.iter().map(|s| s.section).collect();
+        if registered != record.children
+            || sections.len() != spec.sections.len()
+            || !std::path::Path::new(&spec.path).is_absolute()
+            || !std::path::Path::new(&spec.root).is_absolute()
+        {
+            return Err(failure());
+        }
+    }
     Ok(())
 }
 fn read(store: &ExecutionStore, id: &ExecutionId) -> Result<Option<ParentRecord>, Error> {

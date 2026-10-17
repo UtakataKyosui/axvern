@@ -1,5 +1,7 @@
 //! Shared contracts. Native argv stays native until an explicitly checked JSON boundary.
+mod analysis;
 mod discovery;
+pub use analysis::*;
 pub use discovery::*;
 
 use serde::{Deserialize, Serialize};
@@ -229,6 +231,9 @@ pub struct ParentRecord {
     pub registered_at: u64,
     pub cwd: String,
     pub children: Vec<ExecutionId>,
+    /// Set for an `fs analyze` parent; `children` are then its registered sections in order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AnalysisSpec>,
 }
 /// A parent's exit code is not one arbitrarily selected child's numeric exit.
 #[derive(Clone, Debug, Serialize, Deserialize)]

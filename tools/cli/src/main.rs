@@ -1,6 +1,7 @@
 use axvern_core::{
-    discovery, doctor,
+    analyze, discovery, doctor,
     planner::{self, Planned},
+    policy,
     rewrite::{self, Rewrite},
     services::{self, ExecutionService},
 };
@@ -13,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s]";
+const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s]";
 struct Input {
     command: String,
     config: Option<PathBuf>,
@@ -58,7 +59,7 @@ const FS_FLAGS: [&str; 13] = [
 ];
 fn fs_flags(command: &str) -> &'static [&'static str] {
     match command {
-        "fs list" => &["--depth", "--include-ignored"],
+        "fs list" | "fs analyze" => &["--depth", "--include-ignored"],
         "fs find" => &[
             "--glob",
             "--full-path",
@@ -265,7 +266,11 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
             input.id = Some(id.parse()?)
         }
         ["history" | "doctor"] if boundary == args.len() => (),
-        ["fs", sub @ ("list" | "find" | "search" | "read"), rest @ ..] => {
+        [
+            "fs",
+            sub @ ("list" | "find" | "search" | "read" | "analyze"),
+            rest @ ..,
+        ] => {
             // After `--` everything is a literal operand, so patterns may start with a dash.
             let mut words: Vec<String> = rest.iter().map(|w| w.to_string()).collect();
             for word in &input.target {
@@ -274,6 +279,7 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
             let count_ok = match *sub {
                 "list" => words.len() <= 1,
                 "find" | "search" => (1..=2).contains(&words.len()),
+                // read FILE, analyze PATH
                 _ => words.len() == 1,
             };
             if !count_ok {
@@ -586,6 +592,9 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
             },
         };
     }
+    if input.command == "fs analyze" {
+        return analyze(input, config);
+    }
     // Validate input and policy before any backend request or local store initialization.
     let interactive = io::stdin().is_terminal() && io::stderr().is_terminal();
     let mut approval = Approval::NotProvided;
@@ -784,6 +793,22 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                     if value["__parent"] == true {
                         let parent: ParentRecord =
                             serde_json::from_value(value["record"].clone()).expect("parent record");
+                        if parent.analysis.is_some() {
+                            let state = match analyze::observe_with_tasks(
+                                &service,
+                                &parent,
+                                tasks.as_ref().unwrap(),
+                            ) {
+                                Ok(state) => state,
+                                Err(e) => return failure(e),
+                            };
+                            partial |= state
+                                .error
+                                .as_ref()
+                                .is_some_and(|e| e.code != ErrorCode::Expired);
+                            *value = analysis_view(&parent, &state);
+                            continue;
+                        }
                         let view = match axvern_core::parents::inspect_with_tasks(
                             &service,
                             &parent,
@@ -817,11 +842,215 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
 fn parent_output(view: &ParentView) -> Value {
     json!({"kind":"fs.analyze", "command":"fs analyze", "record":view.record,"task":{"state":view.state,"exit_code":null,"started_at":null,"finished_at":null},"children":view.children,"error":view.error,"source":"backend","observed_at":now(),"result_availability":if matches!(view.state,Some(TaskState::Queued|TaskState::Running)) { "pending" } else { "unavailable" }})
 }
+/// Register every child of `fs analyze` after all of them passed validation, Policy and the
+/// tool check; nothing is registered when any of them fails.
+fn analyze(input: &Input, config: axvern_core::config::Config) -> (Response<Value>, i32) {
+    let prepared = std::env::current_dir()
+        .map_err(|_| Error::new(ErrorCode::InvalidInput, "cannot resolve working directory"))
+        .and_then(|cwd| {
+            analyze::prepare(
+                std::path::Path::new(&input.fs_args[0]),
+                input.depth.unwrap_or(DEFAULT_TREE_DEPTH),
+                input.switches.contains("--include-ignored"),
+                &cwd,
+                &config.discovery.limits(),
+            )
+        });
+    let prepared = match prepared {
+        Ok(p) => p,
+        Err(e) => return failure(e),
+    };
+    let interactive = io::stdin().is_terminal() && io::stderr().is_terminal();
+    let mut asks = false;
+    for (_, child) in &prepared.children {
+        match policy::evaluate(&config, &child.plan) {
+            Ok(d) if d.effect == PolicyEffect::Deny => {
+                return failure(Error::new(
+                    ErrorCode::PolicyDenied,
+                    "policy or approval refused registration",
+                ));
+            }
+            Ok(d) => asks |= d.effect == PolicyEffect::Ask,
+            Err(e) => return failure(e),
+        }
+    }
+    // One prompt answers every child that needs approval.
+    let approval = if asks && interactive {
+        approve()
+    } else {
+        Approval::NotProvided
+    };
+    if let Err(e) = analyze::preflight(&config, &prepared, interactive, approval) {
+        return failure(e);
+    }
+    let mut service = match ExecutionService::new(config) {
+        Ok(s) => s,
+        Err(e) => return failure(e),
+    };
+    let runner = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => {
+            return failure(Error::new(
+                ErrorCode::BackendFailure,
+                "cannot locate internal runner",
+            ));
+        }
+    };
+    let store = service.store.clone();
+    let registration = analyze::register(&store, &prepared, |child| {
+        service.run_captured_job(
+            &runner,
+            &child.plan,
+            Some(&child.job),
+            interactive,
+            approval,
+        )
+    });
+    match registration {
+        Ok((record, registration_error)) => {
+            let (mut response, mut code) = analysis_start_response(&service, &record, input.wait);
+            if let Some(error) = registration_error {
+                code = error_exit(&error);
+                response.error = Some(error);
+            }
+            (response, code)
+        }
+        Err(f) => {
+            let (mut response, code) = failure(f.error);
+            if !f.registered.is_empty() {
+                response.output = Some(json!({"registered_children": f.registered}));
+            }
+            (response, code)
+        }
+    }
+}
+fn analysis_view(record: &ParentRecord, state: &analyze::ParentState) -> Value {
+    json!({"kind":analyze::KIND, "command":"fs analyze", "record":record,
+        "task":{"state":state.state,"exit_code":null,"started_at":null,"finished_at":null},
+        "children":state.children, "error":state.error,
+        "source":if state.manifest.is_some() { "store" } else { "backend" }, "observed_at":now(),
+        "result_availability":state.manifest.as_ref().map_or("pending", |m| m.availability.as_str())})
+}
+/// First result page of a published parent, or its sections while children still run.
+fn analysis_result(
+    service: &ExecutionService,
+    record: &ParentRecord,
+    state: &analyze::ParentState,
+    cursor: Option<&str>,
+    limit: usize,
+    max_bytes: usize,
+) -> (Response<Value>, i32) {
+    let (mut response, code) = if state.manifest.is_some() {
+        result_response(service, &record.execution_id, cursor, limit, max_bytes)
+    } else {
+        let mut response = Response::success(
+            json!({"result_availability":"pending","result":null,"children":state.children}),
+        );
+        response.execution_id = Some(record.execution_id.clone());
+        response.error = state.error.clone();
+        let code = state.error.as_ref().map_or(0, error_exit);
+        (response, code)
+    };
+    response.state = state.state;
+    response.exit_code = None;
+    (response, code)
+}
+fn analysis_start_response(
+    service: &ExecutionService,
+    record: &ParentRecord,
+    wait: Duration,
+) -> (Response<Value>, i32) {
+    let observed = if wait.is_zero() {
+        Ok(analyze::ParentState {
+            state: None,
+            children: analyze::registered(record),
+            manifest: None,
+            error: None,
+        })
+    } else {
+        analyze::wait(service, record, wait).map(|(state, _)| state)
+    };
+    let mut state = match observed {
+        Ok(state) => state,
+        Err(e) => {
+            let (mut response, _) = failure(e);
+            response.execution_id = Some(record.execution_id.clone());
+            response.output =
+                Some(json!({"record":record,"result_availability":"pending","result":null}));
+            return (response, 0);
+        }
+    };
+    // Running out of the wait budget is not an error; the children continue.
+    if state
+        .error
+        .as_ref()
+        .is_some_and(|e| e.code == ErrorCode::Timeout)
+    {
+        state.error = None;
+    }
+    // Leave room for the parent record next to the first page.
+    let (mut response, _) = analysis_result(service, record, &state, None, 100, 60000);
+    if let Some(output) = response.output.as_mut() {
+        output["record"] = json!(record);
+    }
+    (response, 0)
+}
+fn analysis_response(
+    service: &ExecutionService,
+    parent: &ParentRecord,
+    input: &Input,
+) -> (Response<Value>, i32) {
+    let observed = match input.command.as_str() {
+        "wait" => analyze::wait(service, parent, input.timeout),
+        _ => analyze::observe(service, parent, Duration::from_secs(5)).map(|s| (s, false)),
+    };
+    let (state, timed_out) = match observed {
+        Ok(v) => v,
+        Err(e) => {
+            let (mut response, code) = failure(e);
+            response.execution_id = Some(parent.execution_id.clone());
+            return (response, code);
+        }
+    };
+    if input.command == "result" {
+        return analysis_result(
+            service,
+            parent,
+            &state,
+            input.cursor.as_deref(),
+            input.limit,
+            input.max_bytes,
+        );
+    }
+    let mut response = Response::success(analysis_view(parent, &state));
+    response.execution_id = Some(parent.execution_id.clone());
+    response.state = state.state;
+    response.error = state.error.clone();
+    let code = if timed_out {
+        response.error = Some(Error::new(
+            ErrorCode::Timeout,
+            "wait timed out; children continue",
+        ));
+        124
+    } else if let Some(error) = &response.error {
+        error_exit(error)
+    } else if input.command == "wait" && state.state == Some(TaskState::Partial) {
+        11
+    } else if input.command == "wait" && state.state == Some(TaskState::Failed) {
+        10
+    } else {
+        0
+    };
+    (response, code)
+}
 fn parent_response(
     service: &ExecutionService,
     parent: &ParentRecord,
     input: &Input,
 ) -> (Response<Value>, i32) {
+    if parent.analysis.is_some() {
+        return analysis_response(service, parent, input);
+    }
     let result = if input.command == "wait" {
         axvern_core::parents::wait(service, parent, input.timeout)
     } else {
@@ -1131,9 +1360,11 @@ fn human(response: &Response<Value>) {
                     .map(ToString::to_string)
                     .unwrap_or_default()
             );
+            // A parent record has children instead of a backend task.
             if let Some(record) = output
                 .get("record")
                 .or_else(|| output.get("registration_receipt"))
+                .filter(|r| r.get("backend").is_some())
             {
                 println!("pueue_task_id: {}", record["backend"]["task_id"]);
             }
@@ -1151,6 +1382,9 @@ fn human(response: &Response<Value>) {
     if let Some(result) = response.output.as_ref().and_then(|o| o.get("result")) {
         if let Some(items) = result["items"].as_array() {
             for item in items {
+                if let Some(section) = item["section"].as_str() {
+                    print!("{section}\t");
+                }
                 if let Some(language) = item["language"].as_str() {
                     println!(
                         "{}\t{}\t{}\t{}\t{}",
@@ -1256,7 +1490,7 @@ fn main() {
             .position(|a| matches!(*a, "fs" | "code"))
             .and_then(|i| Some((words[i], words.get(i + 1)?)))
             .filter(|(group, sub)| match *group {
-                "fs" => matches!(**sub, "list" | "find" | "search" | "read"),
+                "fs" => matches!(**sub, "list" | "find" | "search" | "read" | "analyze"),
                 _ => matches!(**sub, "search" | "stats"),
             })
             .map(|(group, sub)| format!("{group} {sub}"));

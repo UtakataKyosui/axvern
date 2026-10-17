@@ -1,6 +1,6 @@
 //! Discovery contracts: requests, resolved jobs, result items and the stored result document.
 //! A job is the serializable input of one background investigation; it is never a shell string.
-use crate::{ChildState, ErrorCode};
+use crate::{AnalysisSection, ChildState, ErrorCode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -366,6 +366,9 @@ pub struct ResultIssue {
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u64>,
+    /// Set in an `fs analyze` result: the section whose child reported the issue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<AnalysisSection>,
 }
 impl ResultIssue {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
@@ -374,6 +377,7 @@ impl ResultIssue {
             message: message.into(),
             path: None,
             line: None,
+            section: None,
         }
     }
     pub fn at(mut self, path: impl Into<String>) -> Self {
@@ -396,6 +400,8 @@ pub struct ResultWarning {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<AnalysisSection>,
 }
 /// Everything a stored discovery result carries. Items are ordered and bounded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

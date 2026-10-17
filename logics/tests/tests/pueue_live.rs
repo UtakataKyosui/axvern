@@ -301,6 +301,7 @@ fn public_cli_execute_doctor_and_history_contracts() {
         registered_at: u64::MAX - 1,
         cwd: q._temp.path().to_str().unwrap().into(),
         children: vec![id.parse().unwrap(), failed_id.parse().unwrap()],
+        analysis: None,
     };
     let local_store = ExecutionStore::open(&store_path).unwrap();
     axvern_core::parents::save(&local_store, &parent).unwrap();
