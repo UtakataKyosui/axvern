@@ -33,3 +33,16 @@ worker timeout, item and artifact limits remain in force. Permission errors
 inside ignored directories do not make the visible scope partial.
 Regression fixtures cover personal excludes, parent scope, nested negation,
 excluded parent directories, explicit ignored roots and `--include-ignored`.
+
+## Follow-up: read and shared search boundaries (#18 / #19)
+
+`fs read` validates a regular file before opening it and uses a nonblocking open,
+then checks the opened handle again. FIFO/device inputs do not wait for a writer.
+The public line interval validates `N + M - 1`; an extra EOF probe is clamped at
+the backend's integer boundary rather than rejecting a valid final line. CLI
+regressions cover FIFO refusal and the maximum accepted line number.
+
+rg now disables native ignores and uses the shared `.gitignore` result filter,
+matching fd and code search/statistics, with a fixed scan depth of 32. Real CLI
+scope tests cover repositories/non-repositories, nested negation, explicit ignored
+files, personal/dot excludes, and the depth-32/33 boundary.

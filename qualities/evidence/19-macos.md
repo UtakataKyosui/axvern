@@ -21,3 +21,17 @@ Date: 2026-10-16. Platform: macOS arm64. ast-grep 0.51.0, tokei 15.0.0 (serializ
 - `logics/tests/tests/discovery_cli.rs`: input, language, policy, missing-tool and unsupported-build refusals before registration.
 - `logics/tests/tests/code_live.rs`: real ast-grep/tokei through an isolated Pueue daemon; skipped when pueue, ast-grep or tokei is missing.
 - The Mojo contract evaluator cases and error-code table were updated but not executed here (Mojo is not installed); the new cases were replayed against the built binary with a script.
+
+## Follow-up: shared discovery scope (#18 / #19)
+
+The historical native-tool limitations above are not the current axvern ignore
+contract. Backend ignore sources are now disabled and candidates pass through the
+same `.gitignore` matcher as fd. This applies inside and outside repositories,
+preserves nested negations and explicit file targets, and excludes personal/dot
+ignore rules. rg uses `--max-depth 32`; ast-grep/tokei use an anchored 33-component
+exclusion glob that prunes deeper paths. A normalizer guard also rejects paths
+outside that scope. `scope_live.rs` exercises real pinned CLIs without a daemon;
+the existing Pueue live suites cover registration and saved results. Summaries
+record the depth of new runs, while old artifacts keep an unknown depth. Duplicate
+tokei records cannot double count one path. These changes do not invent skipped
+counts or promise complete syntax-error detection from ast-grep.

@@ -2,6 +2,7 @@
 //! a `kind: ERROR` rule marks files that did not parse. A root rule also reports files with
 //! no matches, so max_entries counts scanned files. The rules are
 //! built with `serde_json` only; a pattern can never add a field or a second rule.
+use super::scope::{FileScope, depth_exclude};
 use super::*;
 use serde_json::{Value, json};
 use std::{
@@ -103,11 +104,8 @@ impl DiscoveryAdapter for AstGrep {
         ]
         .map(OsString::from)
         .into();
-        if j.include_ignored {
-            args.extend(["--no-ignore", "parent", "--no-ignore", "vcs"].map(OsString::from));
-        } else if !j.in_repo {
-            args.extend(["--no-ignore", "parent"].map(OsString::from));
-        }
+        args.extend(["--no-ignore", "parent", "--no-ignore", "vcs"].map(OsString::from));
+        args.extend(["--globs".into(), format!("!{}", depth_exclude()).into()]);
         args.push("--".into());
         args.push(j.file.clone().unwrap_or_else(|| ".".into()).into());
         Ok(ExecutionPlan {
@@ -120,6 +118,7 @@ impl DiscoveryAdapter for AstGrep {
         let j = &self.0;
         Ok(Box::new(AstGrepNormalizer {
             job: j.clone(),
+            scope: FileScope::new(&j.root, j.in_repo, j.include_ignored, j.file.is_some()),
             byte_budget,
             pending: Vec::new(),
             skipping: false,
@@ -179,6 +178,7 @@ pub(crate) fn code_match(record: &Value, lang: &str) -> Option<CodeMatchItem> {
 const RECORD_LIMIT: usize = 4 * 1024 * 1024;
 struct AstGrepNormalizer {
     job: CodeSearchJob,
+    scope: FileScope,
     byte_budget: u64,
     pending: Vec<u8>,
     skipping: bool,
@@ -211,6 +211,9 @@ impl AstGrepNormalizer {
                 return self.stop(Stop::Truncated(TruncationReason::MaxEntries));
             }
             self.seen.insert(path.to_owned());
+        }
+        if !self.scope.allows(path, false, &mut self.issues) {
+            return Flow::Continue;
         }
         match event["ruleId"].as_str() {
             Some(ERROR_RULE) => {
@@ -247,6 +250,9 @@ impl AstGrepNormalizer {
                 continue;
             };
             let path = path.strip_prefix("./").unwrap_or(path);
+            if !self.scope.allows(path, true, &mut self.issues) {
+                continue;
+            }
             match classify_io_message(message) {
                 ErrorCode::PermissionDenied => self.issues.error(
                     ResultIssue::new(ErrorCode::PermissionDenied, "path is not readable").at(path),
@@ -328,13 +334,6 @@ impl Normalizer for AstGrepNormalizer {
         let mut items = std::mem::take(&mut self.matches);
         items.retain(|m| !broken.contains(&m.path));
         items.sort_by(|a, b| (&a.path, a.start, a.end).cmp(&(&b.path, b.start, b.end)));
-        if !self.job.include_ignored && !self.job.in_repo {
-            self.issues.warning(
-                WarningCode::IgnoreRulesNotApplied,
-                "ignore files are applied only inside a Git worktree",
-                None,
-            );
-        }
         let partial = !self.issues.errors.is_empty();
         DiscoveryOutcome {
             state,
@@ -342,6 +341,7 @@ impl Normalizer for AstGrepNormalizer {
             document: DiscoveryDocument {
                 summary: DiscoverySummary::CodeSearch {
                     root: self.job.root,
+                    scan_depth: Some(MAX_DEPTH),
                     lang: self.job.lang,
                     pattern: self.job.pattern,
                 },

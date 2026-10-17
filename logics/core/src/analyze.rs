@@ -1,6 +1,6 @@
 //! `fs analyze`: one logical parent over a child execution per section.
 //!
-//! - languages: `code stats` (tokei) of the target, without a depth limit (tokei has none).
+//! - languages: `code stats` (tokei) of the target, bounded to [`SCAN_DEPTH`].
 //! - manifests: `fs find` (fd) of [`MANIFEST_NAMES`] down to [`SCAN_DEPTH`].
 //! - tree: `fs list` (fd) down to the requested depth only. fd rather than eza, for the reasons
 //!   in `adapters::tools` (eza escapes names lossily and descends into `.git`).
@@ -489,7 +489,19 @@ pub fn build(spec: &AnalysisSpec, registered_at: u64, inputs: &[SectionInput]) -
                 SectionScope {
                     section: AnalysisSection::Languages,
                     tool: Some("tokei".into()),
-                    max_depth: None,
+                    max_depth: inputs.iter().find_map(|i| {
+                        if i.section != AnalysisSection::Languages {
+                            return None;
+                        }
+                        match &i.outcome {
+                            SectionOutcome::Stored { header, .. } => {
+                                header["summary"]["scan_depth"]
+                                    .as_u64()
+                                    .and_then(|n| u32::try_from(n).ok())
+                            }
+                            _ => None,
+                        }
+                    }),
                 },
                 scope(AnalysisSection::Manifests, "fd", Some(spec.scan_depth)),
                 scope(AnalysisSection::Tree, "fd", Some(spec.tree_depth)),

@@ -31,6 +31,7 @@
 //! - Neither ast-grep nor tokei applies `.gitignore` outside a Git worktree. tokei cannot skip
 //!   `.git/info/exclude` or global ignore files (it only has `--no-ignore-parent`,
 //!   `--no-ignore-dot` and `--no-ignore`); ast-grep can (`--no-ignore exclude|global`).
+//!   axvern disables backend ignores and applies the shared .gitignore filter instead.
 use crate::adapters::pueue::probe;
 use axvern_models::*;
 use std::{
@@ -44,6 +45,7 @@ pub mod ast_grep;
 pub mod bat;
 pub mod fd;
 pub mod rg;
+mod scope;
 pub mod tokei;
 
 /// Detection contract consumed by `doctor`.

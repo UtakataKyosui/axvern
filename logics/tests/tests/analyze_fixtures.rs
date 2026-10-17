@@ -347,7 +347,7 @@ fn three_finished_children_are_published_once_and_reread_without_the_backend() {
     assert_eq!(
         summary["scope"],
         json!([
-            {"section":"languages","tool":"tokei","max_depth":null},
+            {"section":"languages","tool":"tokei","max_depth":32},
             {"section":"manifests","tool":"fd","max_depth":32},
             {"section":"tree","tool":"fd","max_depth":1},
         ])
