@@ -91,11 +91,21 @@ impl Default for Policy {
         }
     }
 }
+/// Opt-in rewriting. Only catalog rules named in `rules` apply, and only when `enabled`.
 #[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Replacement {
-    #[serde(default)]
     pub enabled: bool,
+    pub rules: Vec<String>,
+    pub on_missing_tool: MissingTool,
+}
+/// What to do when a matched rule's target CLI is not installed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissingTool {
+    #[default]
+    Skip,
+    Error,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -145,8 +155,17 @@ impl Config {
         if self.policy.default != PolicyEffect::Ask {
             return Err(invalid("policy.default must be ask"));
         }
-        if self.replacement.enabled {
-            return Err(invalid("replacement is not implemented"));
+        let mut rules = HashSet::new();
+        if (self.replacement.enabled && self.replacement.rules.is_empty())
+            || self
+                .replacement
+                .rules
+                .iter()
+                .any(|id| crate::rewrite::rule(id).is_none() || !rules.insert(id))
+        {
+            return Err(invalid(
+                "replacement.rules must list unique known rule IDs when enabled",
+            ));
         }
         if self.policy.rules.len() > 1024 {
             return Err(invalid("too many rules"));

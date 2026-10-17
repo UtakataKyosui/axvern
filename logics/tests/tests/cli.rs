@@ -95,6 +95,41 @@ fn syntax_config_errors_and_target_flags() {
 }
 
 #[test]
+fn policy_check_reports_rewrite_and_evaluates_both_commands() {
+    let rules = "[replacement]\nenabled=true\nrules=['ls-to-eza']\non_missing_tool='skip'\n";
+    let check = |extra: &str| {
+        let (_dir, config) = private_config(&format!("schema_version=1\n{rules}{extra}"));
+        let result = cli(
+            &["policy", "check", "--format", "json", "--", "ls", "-A"],
+            Some(&config),
+        );
+        assert!(result.status.success());
+        serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap()
+    };
+    let allow_ls = "[[policy.rules]]\nid='a'\neffect='allow'\ncommand='ls'\n";
+    let json = check(allow_ls);
+    // Without an eza rule the converted command asks, even though `ls` is allowed.
+    let rewrite = &json["output"]["rewrite"];
+    match rewrite["status"].as_str() {
+        Some("rewritten") => {
+            assert_eq!(json["output"]["effect"], "ask");
+            assert_eq!(rewrite["rule_id"], "ls-to-eza");
+            assert_eq!(rewrite["original"]["program"], "ls");
+            assert_eq!(rewrite["rewritten"]["program"], "eza");
+            let json = check(&format!(
+                "{allow_ls}[[policy.rules]]\nid='b'\neffect='deny'\ncommand='eza'\n"
+            ));
+            assert_eq!(json["output"]["effect"], "deny");
+            assert_eq!(json["output"]["rule_id"], "b");
+        }
+        // eza is not installed: the skip is explicit and the original command is judged.
+        status => {
+            assert_eq!(status, Some("skipped"));
+            assert_eq!(json["output"]["effect"], "allow");
+        }
+    }
+}
+#[test]
 fn global_config_precedes_environment_and_flags_accept_global_position() {
     let (_dir, config) = private_config("schema_version=1");
     let result = cli(
@@ -274,6 +309,7 @@ fn doctor_tool_and_store_failures_are_structured() {
         },
         registered_at: 1,
         cwd: root.to_str().unwrap().into(),
+        rewrite: None,
     };
     execution_store.save_record(&record).unwrap();
     for (created, expected) in [("replacement", "warning"), ("original", "pass")] {
@@ -358,7 +394,9 @@ fn doctor_tool_and_store_failures_are_structured() {
     assert_eq!(find(&checks, "hyperfine").unwrap()["level"], "fail");
     assert!(find(&checks, "eza").is_none());
     let (_, checks) = scoped("all");
-    assert_eq!(find(&checks, "delta").unwrap()["level"], "warning");
+    for optional in ["git", "delta", "dust", "procs"] {
+        assert_eq!(find(&checks, optional).unwrap()["level"], "warning");
+    }
     assert!(find(&checks, "samply").is_some());
     let (code, checks) = scoped("core");
     assert_eq!(code, 0);

@@ -4,7 +4,8 @@ use crate::{
         pueue::probe,
         tools::{self, ToolSpec, ToolStatus, version_token},
     },
-    config::Config,
+    config::{Config, MissingTool, Replacement},
+    rewrite::{RULES, rule},
     services,
     store::ExecutionStore,
 };
@@ -127,6 +128,63 @@ fn future_tool(name: &str, purpose: &str, required: bool, deadline: Instant) -> 
         tool: Some(ToolDiagnostic { installed, version, supported_versions: vec![], feature_available: false, purpose: purpose.into(), dependencies: vec!["pueue 4.0.4".into()] }),
     }
 }
+/// Rule catalog and the CLI each enabled rule depends on. A missing target fails only
+/// when `on_missing_tool = "error"`; otherwise requests simply keep the original command.
+fn replacement_checks(replacement: &Replacement, deadline: Instant) -> Vec<Diagnostic> {
+    if !replacement.enabled {
+        let ids: Vec<_> = RULES.iter().map(|r| r.id).collect();
+        return vec![Diagnostic {
+            name: "replacement_rules".into(),
+            level: CheckLevel::Pass,
+            message: format!("disabled (default); available rules: {}", ids.join(", ")),
+            remedy: None,
+            tool: None,
+        }];
+    }
+    replacement
+        .rules
+        .iter()
+        .filter_map(|id| rule(id))
+        .map(|spec| {
+            let result = remaining(deadline)
+                .and_then(|timeout| probe(Command::new(spec.target).arg("--version"), timeout));
+            let (installed, version) = match &result {
+                Ok((_, bytes)) => (Some(true), version_token(bytes)),
+                Err(error) if error.code == ErrorCode::MissingTool => (Some(false), None),
+                _ => (None, None),
+            };
+            let ready = matches!(result, Ok((true, _)));
+            let level = match (ready, replacement.on_missing_tool) {
+                (true, _) => CheckLevel::Pass,
+                (false, MissingTool::Error) => CheckLevel::Fail,
+                (false, MissingTool::Skip) => CheckLevel::Warning,
+            };
+            Diagnostic {
+                name: format!("replacement_{}", spec.id),
+                level,
+                message: if ready {
+                    format!("{} -> {} available", spec.source, spec.target)
+                } else {
+                    format!("{} is unavailable for rule {}", spec.target, spec.id)
+                },
+                remedy: (!ready).then(|| {
+                    format!(
+                        "install {} or remove {} from replacement.rules",
+                        spec.target, spec.id
+                    )
+                }),
+                tool: Some(ToolDiagnostic {
+                    installed,
+                    version,
+                    supported_versions: vec![],
+                    feature_available: ready,
+                    purpose: format!("opt-in replacement of {}", spec.source),
+                    dependencies: vec![],
+                }),
+            }
+        })
+        .collect()
+}
 pub fn diagnose(config: Result<Config, Error>, cwd: &Path) -> DoctorReport {
     diagnose_scope(config, cwd, "core")
 }
@@ -149,6 +207,7 @@ pub fn diagnose_scope_with_timeout(
             .unwrap_or_else(|e| Err(e.clone())),
         "repair selected TOML configuration and policy; use schema_version=1 and private permissions",
     )];
+    let replacement = config.as_ref().ok().map(|c| c.replacement.clone());
     if let Ok(config) = config {
         let store = services::store_path(&config).and_then(|path| {
             services::prepare_parent(&path)?;
@@ -263,6 +322,7 @@ pub fn diagnose_scope_with_timeout(
     }
     if scope == "all" {
         for (tool, purpose) in [
+            ("git", "diff source of truth"),
             ("delta", "diff presentation"),
             ("dust", "disk usage"),
             ("procs", "process inspection"),
@@ -287,6 +347,9 @@ pub fn diagnose_scope_with_timeout(
             Err(e) if e.code == ErrorCode::Timeout => warning(&format!("project_{tool}"), "project tool not checked: overall deadline exhausted", &format!("check {tool} separately or retry when earlier checks can finish")),
             _ => warning(&format!("project_{tool}"), "project tool unavailable", &format!("install/enable {tool} for this project; it is not required by the axvern runtime")),
         });
+    }
+    if let Some(replacement) = replacement {
+        checks.extend(replacement_checks(&replacement, deadline));
     }
     let level = if checks.iter().any(|c| c.level == CheckLevel::Fail) {
         CheckLevel::Fail
