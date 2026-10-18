@@ -23,6 +23,23 @@ pub struct Config {
     pub results: Results,
     #[serde(default)]
     pub discovery: Discovery,
+    #[serde(default)]
+    pub logs: Logs,
+}
+/// Limits for `recall --output`. Pueue's own retention is not configured here.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Logs {
+    pub recall_max_output_bytes: u64,
+    pub recall_deadline_seconds: u64,
+}
+impl Default for Logs {
+    fn default() -> Self {
+        Self {
+            recall_max_output_bytes: axvern_models::RECALL_DEFAULT_OUTPUT_BYTES,
+            recall_deadline_seconds: axvern_models::RECALL_DEFAULT_DEADLINE_SECONDS,
+        }
+    }
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -127,6 +144,7 @@ impl Default for Config {
             execution: Execution::default(),
             results: Results::default(),
             discovery: Discovery::default(),
+            logs: Logs::default(),
         }
     }
 }
@@ -151,6 +169,12 @@ impl Config {
             || !(1000..=600000).contains(&self.discovery.timeout_ms)
         {
             return Err(invalid("invalid results/discovery limits"));
+        }
+        if !(1..=axvern_models::RECALL_MAX_OUTPUT_BYTES)
+            .contains(&self.logs.recall_max_output_bytes)
+            || !(1..=3600).contains(&self.logs.recall_deadline_seconds)
+        {
+            return Err(invalid("invalid logs limits"));
         }
         if self.policy.default != PolicyEffect::Ask {
             return Err(invalid("policy.default must be ask"));

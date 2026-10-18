@@ -39,6 +39,14 @@ timeout_ms = 60000
 
 Result retention accepts 1h–365 days; capacity 1MiB–1TiB; artifact limit 1KiB–1GiB and no greater than capacity. Set both capacity and artifact limit when lowering capacity. Completion time starts retention; reads never extend it. Expired results are removed first, then oldest completed results (completion second/ID order) to obtain capacity. Active spool reservations count toward capacity and are not evicted. Preview capture stops at its reserved byte budget and records truncation while the target continues. Metadata and tombstones count toward used bytes and are not automatically removed; filesystem allocation overhead is not a quota guarantee. Storage exhaustion refuses new work when detected before registration and otherwise records a result failure separately from target failure.
 
+```toml
+[logs]
+recall_max_output_bytes = 1073741824
+recall_deadline_seconds = 300
+```
+
+`recall --output` refuses a log larger than `recall_max_output_bytes` (1 byte–10 GiB, default 1 GiB) and stops after `recall_deadline_seconds` (1–3600, default 300). These limits never stop the original task and are independent of `query`'s fixed limits; see [retrieve](/retrieve). `results.retention_seconds` does not apply to Pueue's raw logs.
+
 Discovery limits apply to the implemented discovery workers: max_items 1–100000, max_entries at least max_items and at most 1000000, timeout_ms 1000–600000. They do not limit arbitrary `run` durations. `fs analyze` applies them to each child and its own aggregate. See [discovery scope and limitations](/discovery).
 
 History, request IDs and tombstones have no automatic TTL. The legacy `prune_before` metadata API refuses to run once request reservations exist; no deletion CLI is exposed. Stop clients/workers and back up the private store before manual maintenance. Do not remove request records to recover space and then resend old keys: that would defeat duplicate prevention. Active manifests left by killed runners require explicit manual investigation; they are never silently evicted/reexecuted. Pueue's own clean/reset/retention is independent of captured run results.

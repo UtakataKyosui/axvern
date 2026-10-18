@@ -1,8 +1,10 @@
 //! Shared contracts. Native argv stays native until an explicitly checked JSON boundary.
 mod analysis;
 mod discovery;
+mod logs;
 pub use analysis::*;
 pub use discovery::*;
+pub use logs::*;
 
 use serde::{Deserialize, Serialize};
 use std::{ffi::OsString, fmt, path::PathBuf, str::FromStr};
@@ -152,6 +154,14 @@ pub enum Approval {
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     StorageFull,
+    /// The Pueue task exists but its log file does not (never started, or deleted).
+    LogMissing,
+    /// The log changed or shrank while it was being read.
+    LogChanged,
+    /// The log does not fit the requested inline or file output limit.
+    OutputTooLarge,
+    /// `--output` names a path that already exists; nothing is overwritten.
+    OutputExists,
     InvalidCursor,
     ResultExpired,
     ResultEvicted,

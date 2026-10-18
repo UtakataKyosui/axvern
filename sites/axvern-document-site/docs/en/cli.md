@@ -10,9 +10,11 @@ axvern result EXECUTION_ID [--cursor TOKEN] [--limit 100] [--max-bytes 65536]
 axvern history [--limit 20]
 axvern doctor [--scope core|discovery|logs|performance|all]
 axvern policy check [--cwd PATH] -- PROGRAM [ARGS...]
+axvern query EXECUTION_ID (--match TEXT | --errors | --tail N | --from-line N --lines M) [--limit 100] [--max-bytes 65536]
+axvern recall EXECUTION_ID [--output FILE]
 ```
 
-See [v0.2 discovery](/discovery) for `fs list/find/search/read/analyze`, `code search/stats`, backend versions and scope limitations.
+See [retrieve](/retrieve) for `query`/`recall` (reading Pueue's retained log without re-running the command, limits, retention) and [v0.2 discovery](/discovery) for `fs list/find/search/read/analyze`, `code search/stats`, backend versions and scope limitations.
 
 ## Registration and waiting
 
@@ -67,11 +69,11 @@ Each external probe has a 5s limit, capped by the overall 30s probe deadline. De
 | 8 | Backend mapping expired/reused/foreign |
 | 9 | Policy/approval refused |
 | 10 | Explicit wait observed target failure |
-| 11 | Partial history, missing/expired/evicted result, output limit too small |
+| 11 | Partial history, missing/expired/evicted result, output limit too small; log missing/changed, inline output too large, incomplete `query` scan |
 | 12 | Doctor Fail |
 | 13 | Store I/O/schema/capacity failure |
 | 14 | Registration outcome unknown; never blindly resubmit |
-| 15 | Request ID conflict |
+| 15 | Request ID conflict; `recall --output` target already exists |
 | 16 | Unsupported capability |
 | 124 | Explicit wait/backend timeout; task is not stopped |
 

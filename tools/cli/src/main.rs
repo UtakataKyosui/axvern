@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s] | system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s] | code diff [--staged] [--wait 1s] | system processes [--match TEXT] [--limit 100] [--wait 1s]";
+const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s] | system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s] | code diff [--staged] [--wait 1s] | system processes [--match TEXT] [--limit 100] [--wait 1s] | query <execution-id> (--match TEXT | --errors | --tail N | --from-line N --lines M) [--limit 100] [--max-bytes 65536] | recall <execution-id> [--output FILE]";
 struct Input {
     command: String,
     config: Option<PathBuf>,
@@ -44,9 +44,11 @@ struct Input {
     size_mode: Option<SizeMode>,
     matching: Option<String>,
     process_limit: Option<u32>,
+    tail: Option<u64>,
+    output: Option<PathBuf>,
 }
 /// Flags that only the discovery commands accept, and which of them each command accepts.
-const FS_FLAGS: [&str; 17] = [
+const FS_FLAGS: [&str; 20] = [
     "--staged",
     "--match",
     "--top",
@@ -64,6 +66,9 @@ const FS_FLAGS: [&str; 17] = [
     "--lines",
     "--pattern",
     "--lang",
+    "--errors",
+    "--tail",
+    "--output",
 ];
 fn fs_flags(command: &str) -> &'static [&'static str] {
     match command {
@@ -90,6 +95,8 @@ fn fs_flags(command: &str) -> &'static [&'static str] {
         "system disk-usage" => &["--depth", "--top", "--size"],
         "code diff" => &["--staged"],
         "system processes" => &["--match"],
+        "query" => &["--match", "--errors", "--tail", "--from-line", "--lines"],
+        "recall" => &["--output"],
         _ => &[],
     }
 }
@@ -155,6 +162,8 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         size_mode: None,
         matching: None,
         process_limit: None,
+        tail: None,
+        output: None,
     };
     let mut positional = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -165,7 +174,7 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
             // `--glob` selects the pattern syntax for find and takes a value for search.
             let switch = match arg {
                 "--include-ignored" | "--full-path" | "--ignore-case" | "--fixed-strings"
-                | "--staged" => true,
+                | "--staged" | "--errors" => true,
                 "--glob" => positional.starts_with(&["fs", "find"]),
                 _ => false,
             };
@@ -252,6 +261,8 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
                 "--glob" if !value.is_empty() => {
                     input.globs.push(value.to_str().ok_or_else(invalid)?.into())
                 }
+                "--tail" => input.tail = Some(digits(value)?),
+                "--output" if !value.is_empty() => input.output = Some(value.into()),
                 "--cursor" => input.cursor = Some(value.to_str().ok_or_else(invalid)?.into()),
                 "--max-bytes" => {
                     let number = value.to_str().ok_or_else(invalid)?;
@@ -292,6 +303,7 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         ["status" | "wait" | "result", id] if boundary == args.len() => {
             input.id = Some(id.parse()?)
         }
+        ["query" | "recall", id] if boundary == args.len() => input.id = Some(id.parse()?),
         ["history" | "doctor"] if boundary == args.len() => (),
         [
             "fs",
@@ -356,11 +368,26 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
     }) {
         return Err(invalid());
     }
-    if input.command == "result" {
+    if input.command == "query" {
+        // Exactly one selector; a range needs both of its bounds.
+        let chosen = [
+            seen.contains("--match"),
+            input.switches.contains("--errors"),
+            seen.contains("--tail"),
+            seen.contains("--from-line") || seen.contains("--lines"),
+        ];
+        if chosen.iter().filter(|c| **c).count() != 1
+            || seen.contains("--from-line") != seen.contains("--lines")
+        {
+            return Err(invalid());
+        }
+        query_spec(&input).validate().map_err(|_| invalid())?;
+    }
+    if matches!(input.command.as_str(), "result" | "query") {
         if !seen.contains("--limit") {
             input.limit = 100;
         }
-        if input.limit > 100 {
+        if input.command == "result" && input.limit > 100 {
             return Err(invalid());
         }
     }
@@ -372,10 +399,10 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         || (seen.contains("--limit")
             && !matches!(
                 input.command.as_str(),
-                "history" | "result" | "system processes"
+                "history" | "result" | "system processes" | "query"
             ))
-        || ((seen.contains("--cursor") || seen.contains("--max-bytes"))
-            && input.command != "result")
+        || (seen.contains("--cursor") && input.command != "result")
+        || (seen.contains("--max-bytes") && !matches!(input.command.as_str(), "result" | "query"))
     {
         return Err(invalid());
     }
@@ -453,7 +480,7 @@ fn discovery_request(input: &Input) -> Result<DiscoveryRequest, Error> {
 }
 fn error_exit(error: &Error) -> i32 {
     match error.code {
-        ErrorCode::RequestConflict => 15,
+        ErrorCode::RequestConflict | ErrorCode::OutputExists => 15,
         ErrorCode::UnsupportedCapability
         | ErrorCode::UnsupportedLanguage
         | ErrorCode::UnsupportedToolCapability => 16,
@@ -477,7 +504,10 @@ fn error_exit(error: &Error) -> i32 {
         | ErrorCode::OutputMissing
         | ErrorCode::ResultExpired
         | ErrorCode::ResultEvicted
-        | ErrorCode::OutputLimitTooSmall => 11,
+        | ErrorCode::OutputLimitTooSmall
+        | ErrorCode::LogMissing
+        | ErrorCode::LogChanged
+        | ErrorCode::OutputTooLarge => 11,
         ErrorCode::StoreFailure | ErrorCode::StorageFull => 13,
         ErrorCode::RegistrationUnknown => 14,
         ErrorCode::Timeout => 124,
@@ -707,13 +737,25 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
     } else {
         None
     };
-    let mut service = match ExecutionService::new(config) {
+    let mut service = match ExecutionService::new(config.clone()) {
         Ok(s) => s,
         Err(e) => return failure(e),
     };
-    if matches!(input.command.as_str(), "status" | "wait" | "result") {
+    if matches!(
+        input.command.as_str(),
+        "status" | "wait" | "result" | "query" | "recall"
+    ) {
         let id = input.id.as_ref().expect("parsed ID");
         match axvern_core::parents::find(&service.store, id) {
+            Ok(Some(parent)) if matches!(input.command.as_str(), "query" | "recall") => {
+                let (mut response, code) = failure(Error::new(
+                    ErrorCode::InvalidTarget,
+                    "a parent analysis keeps no log of its own; query one of its child executions",
+                ));
+                response.execution_id = Some(id.clone());
+                response.output = Some(json!({"children": parent.children}));
+                return (response, code);
+            }
             Ok(Some(parent)) => return parent_response(&service, &parent, input),
             Ok(None) => (),
             Err(e) => return failure(e),
@@ -747,6 +789,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                 }
             }
         }
+        "query" | "recall" => logs_response(&service, &config, input),
         "result" => {
             let id = input.id.as_ref().expect("parsed ID");
             if let Err(e) = service.store.find_record(id) {
@@ -904,6 +947,59 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
             Err(e) => failure(e),
         },
         _ => unreachable!(),
+    }
+}
+fn query_spec(input: &Input) -> QuerySpec {
+    let selector = if let Some(text) = &input.matching {
+        QuerySelector::Match(text.clone())
+    } else if input.switches.contains("--errors") {
+        QuerySelector::Errors
+    } else if let Some(n) = input.tail {
+        QuerySelector::Tail(n)
+    } else {
+        QuerySelector::Range {
+            from_line: input.from_line.unwrap_or(1),
+            lines: u64::from(input.lines.unwrap_or(1)),
+        }
+    };
+    QuerySpec {
+        selector,
+        limit: input.limit,
+        max_bytes: input.max_bytes,
+    }
+}
+/// `query` and `recall`: read the retained Pueue log, never re-run the command.
+fn logs_response(
+    service: &ExecutionService,
+    config: &axvern_core::config::Config,
+    input: &Input,
+) -> (Response<Value>, i32) {
+    use axvern_core::logs::{self, recall::RecallSpec};
+    let id = input.id.as_ref().expect("parsed ID");
+    let report = if input.command == "query" {
+        logs::query(service, id, &query_spec(input))
+    } else {
+        logs::recall(
+            service,
+            id,
+            &RecallSpec::from_config(input.output.clone(), &config.logs),
+        )
+    };
+    match report {
+        Ok(report) => {
+            let mut response = Response::success(report.output);
+            response.execution_id = Some(id.clone());
+            response.state = Some(report.task.state.into());
+            response.exit_code = report.task.exit_code;
+            let code = if report.error.is_some() { 11 } else { 0 };
+            response.error = report.error;
+            (response, code)
+        }
+        Err(e) => {
+            let (mut response, code) = failure(e);
+            response.execution_id = Some(id.clone());
+            (response, code)
+        }
     }
 }
 fn parent_output(view: &ParentView) -> Value {
@@ -1380,9 +1476,49 @@ fn visible(s: &str) -> String {
         })
         .collect()
 }
+fn human_log(output: &Value) {
+    println!(
+        "source_execution_id: {}\nobserved_at: {}\nstream: {}\npartial_log: {}\nlog_location: {}",
+        output["source_execution_id"].as_str().unwrap_or(""),
+        output["observed_at"].as_str().unwrap_or(""),
+        output["stream"].as_str().unwrap_or(""),
+        output["partial_log"],
+        visible(output["log_location"].as_str().unwrap_or(""))
+    );
+    if output["kind"] == "recall" {
+        if let Some(file) = output["output_file"].as_str() {
+            println!(
+                "output_file: {}\nbytes: {}\nsha256: {}",
+                visible(file),
+                output["bytes"],
+                output["sha256"].as_str().unwrap_or("")
+            );
+        }
+        // Escaped, so a log cannot drive the terminal.
+        if let Some(text) = output["text"].as_str() {
+            for line in text.split_inclusive('\n') {
+                println!("{}", visible(line.trim_end_matches('\n')));
+            }
+        }
+        return;
+    }
+    for item in output["items"].as_array().into_iter().flatten() {
+        println!(
+            "{}:{}",
+            item["line"],
+            visible(item["text"].as_str().unwrap_or(""))
+        );
+    }
+    println!(
+        "truncated: {}\nomitted_count: {}\nscan_complete: {}",
+        output["truncated"], output["omitted_count"], output["scan_complete"]
+    );
+}
 fn human(response: &Response<Value>) {
     if let Some(output) = &response.output {
-        if let Some(effect) = output.get("effect").and_then(Value::as_str) {
+        if matches!(output["kind"].as_str(), Some("query" | "recall")) {
+            human_log(output);
+        } else if let Some(effect) = output.get("effect").and_then(Value::as_str) {
             let effect = match effect {
                 "ask" => "Ask",
                 "allow" => "Allow",
@@ -1612,7 +1748,15 @@ fn main() {
             .find(|a| {
                 matches!(
                     *a,
-                    "run" | "status" | "wait" | "history" | "doctor" | "policy" | "result"
+                    "run"
+                        | "status"
+                        | "wait"
+                        | "history"
+                        | "doctor"
+                        | "policy"
+                        | "result"
+                        | "query"
+                        | "recall"
                 )
             })
             .map(|a| {
