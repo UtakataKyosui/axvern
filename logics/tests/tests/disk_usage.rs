@@ -151,6 +151,51 @@ fn a_symlink_is_counted_as_a_link_and_never_followed() {
 }
 
 #[test]
+fn an_explicit_symlink_is_measured_as_the_link_and_git_can_be_targeted() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    write(&outside.path().join("huge.bin"), 1_000_000);
+    symlink(
+        outside.path().join("huge.bin"),
+        temp.path().join("file-link"),
+    )
+    .unwrap();
+    symlink(outside.path(), temp.path().join("dir-link")).unwrap();
+    for name in ["file-link", "dir-link"] {
+        let outcome = run(
+            temp.path(),
+            DiscoveryRequest::DiskUsage {
+                path: Some(name.into()),
+                depth: 3,
+                top: 20,
+                size_mode: SizeMode::Apparent,
+            },
+        );
+        let rows = usage(&outcome);
+        assert_eq!(rows.len(), 1, "{name}");
+        assert_eq!(rows[0].0, name);
+        assert!(
+            rows[0].1 < 1000,
+            "{name}: the link, not its target: {rows:?}"
+        );
+        assert!(summary(&outcome).0 < 1000);
+    }
+    write(&temp.path().join(".git/objects/o"), 400);
+    for path in [".git", ".git/objects"] {
+        let outcome = run(
+            temp.path(),
+            DiscoveryRequest::DiskUsage {
+                path: Some(path.into()),
+                depth: 3,
+                top: 20,
+                size_mode: SizeMode::Apparent,
+            },
+        );
+        assert!(summary(&outcome).0 >= 400, "{path}");
+    }
+}
+
+#[test]
 fn a_single_file_is_one_row() {
     let temp = tempfile::tempdir().unwrap();
     write(&temp.path().join("only.bin"), 1234);
