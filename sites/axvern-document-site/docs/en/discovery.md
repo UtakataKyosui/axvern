@@ -11,6 +11,7 @@ These commands are implemented in the source checkout. They validate inputs and 
 | `fs read` | bat | 0.24.0 | 0.26.1 |
 | `code search` | ast-grep | 0.51.0 | 0.51.0 |
 | `code stats` | tokei with JSON serialization | 15.0.0 | 15.0.0 |
+| `system disk-usage` | built in (no external CLI) | – | – |
 | `fs analyze` | fd + tokei | as above | as above |
 
 Pueue/client and daemon must be 4.0.4. `doctor --scope discovery` reports missing, unsupported and incapable builds. A version range is not evidence that every later release was tested. eza is optional: its display text cannot safely represent structured entries, so `fs list` uses fd. git/delta/dust/procs are optional, unprovided integrations and do not block the discovery gate.
@@ -57,6 +58,7 @@ axvern fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [-
 axvern fs read FILE [--from-line 1] [--lines 80] [--wait 1s]
 axvern code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s]
 axvern code stats [PATH] [--include-ignored] [--wait 1s]
+axvern system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s]
 axvern fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s]
 ```
 
@@ -100,3 +102,18 @@ Aggregation is lazy: the first observation after children finish publishes the p
 Saved results use the same [pagination and retention contract](/cli) as run results: `output.result` contains kind, summary, items, completeness, errors, warnings and page. Fetching retained pages does not resume a scan or replay a child. A successful `result` retrieval exits 0 even for a partial/failed target; explicit parent `wait` exits 11 for partial or 10 for failed. Registration can fail after some children were accepted; preserve the returned parent/child IDs and receipt rather than blindly retrying.
 
 The configured budgets apply to each child; the aggregate also limits its own items/artifact. Item order is languages → manifests → tree, so byte truncation removes tree entries first. Oversized headers fail with `output_limit_too_small`. This retained-artifact behavior does not claim the future AC-31 query/recall guarantee.
+
+## Disk usage
+
+`system disk-usage` is measured by axvern itself, not by dust: dust's JSON has no partial marker, counts hard links twice in apparent mode and gives no node type (spike #23). It starts like the other commands (Policy, Pueue, `--wait`, `result`) but its worker walks the tree in-process, so no external CLI is required. For Policy it is the pseudo-program `axvern-disk-usage`; add an exact rule when noninteractive use is intended:
+
+```toml
+[[policy.rules]]
+id = "disk-usage"
+command = "axvern-disk-usage"
+effect = "allow"
+```
+
+`--size allocated` (default) reports the blocks the filesystem allocated; `--size apparent` reports logical length. The mode is always returned and never substituted. Units are integer bytes. A directory's own entry is counted and a parent's size contains its children, so the listed rows must not be added up: use `summary.total_bytes`. Hidden entries, ignored files and `.git` contents are measured (a capacity question, unlike code search). Symbolic links count as links and are never followed; a directory on another filesystem is not entered (`other_filesystem_skipped` warning). A file with several hard links is counted once and attributed to the first path in byte order of its path components; the other links show 0.
+
+`--depth` (default 3, 1–32) only selects which rows are listed; the whole tree is measured within the usual budgets. `--top` (default 20, 1–1000) keeps the largest rows, ties ordered by path bytes, and is a request, not truncation. An unreadable path makes the result `partial` with `summary.lower_bound=true` (sizes are at least these values); reaching `max_entries` or the timeout is `truncated` with the same lower bound. Non-UTF-8 names are counted in the totals, reported as an `invalid_encoding` error and not listed. `summary.entries` counts measured entries below the root. Sizes are not a point-in-time snapshot; entries that vanish during the walk produce a warning.

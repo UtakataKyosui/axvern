@@ -340,6 +340,26 @@ pub fn prepare(
                 limits: limits.clone(),
             })
         }
+        DiscoveryRequest::DiskUsage {
+            path,
+            depth: d,
+            top,
+            size_mode,
+        } => {
+            let d = depth(*d)?;
+            if !(1..=MAX_DISK_TOP).contains(top) {
+                return Err(invalid(ErrorCode::InvalidInput, "top must be 1..1000"));
+            }
+            let (root, file) = directory_or_file(path.as_deref(), cwd)?;
+            DiscoveryJob::DiskUsage(DiskUsageJob {
+                root: utf8(&root),
+                file,
+                depth: d,
+                top: *top,
+                size_mode: *size_mode,
+                limits: limits.clone(),
+            })
+        }
     };
     let adapter = tools::adapter(&job);
     let plan = adapter.plan()?;
@@ -353,6 +373,9 @@ pub fn prepare(
 /// The tool must be installed, and capable of what the job needs, before a task is
 /// registered for it.
 pub fn ensure_tool(job: &DiscoveryJob, plan: &ExecutionPlan) -> Result<(), Error> {
+    if tools::adapter(job).is_native() {
+        return Ok(());
+    }
     tools::locate(&plan.program).ok_or_else(|| {
         Error::new(
             ErrorCode::MissingTool,
@@ -510,6 +533,13 @@ pub fn run_worker(
     let (mut m, mut file) = results::reserve_or_record(store, settings, id)?;
     let budget = m.reserved();
     let adapter = tools::adapter(job);
+    if adapter.is_native() {
+        let deadline = Instant::now() + Duration::from_millis(job.limits().timeout_ms);
+        let outcome = adapter
+            .run_native(deadline)
+            .unwrap_or_else(|| unreachable!());
+        return finish_worker(store, id, job, &mut m, &mut file, budget, outcome);
+    }
     let mut normalizer = match adapter.normalizer(budget.saturating_sub(HEADER_SLACK * 2)) {
         Ok(n) => n,
         Err(error) => {
@@ -521,14 +551,25 @@ pub fn run_worker(
     let deadline = Instant::now() + Duration::from_millis(job.limits().timeout_ms);
     let (exit, stderr) = execute(plan, normalizer.as_mut(), deadline);
     let outcome = normalizer.finish(&exit, &stderr);
+    finish_worker(store, id, job, &mut m, &mut file, budget, outcome)
+}
+fn finish_worker(
+    store: &ExecutionStore,
+    id: &ExecutionId,
+    job: &DiscoveryJob,
+    m: &mut results::Manifest,
+    file: &mut File,
+    budget: u64,
+    outcome: DiscoveryOutcome,
+) -> Result<i32, Error> {
     let (state, exit_code) = (outcome.state, outcome.exit_code);
     m.complete(job.kind(), state, exit_code);
     let mut document = outcome.document;
-    let saved = write_artifact(&mut file, &mut document, budget).and_then(|bytes| {
-        results::publish_available(store, id, &mut m, bytes, document.completeness.truncated)
+    let saved = write_artifact(file, &mut document, budget).and_then(|bytes| {
+        results::publish_available(store, id, m, bytes, document.completeness.truncated)
     });
     if let Err(error) = saved {
-        results::record_persistence_failure(store, id, &mut m, error);
+        results::record_persistence_failure(store, id, m, error);
     }
     Ok(match state {
         ChildState::Done => 0,

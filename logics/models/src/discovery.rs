@@ -34,6 +34,16 @@ pub enum EntryType {
     Symlink,
     Other,
 }
+/// Which size `system disk-usage` reports: blocks the filesystem allocated, or logical length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SizeMode {
+    Allocated,
+    Apparent,
+}
+pub const DEFAULT_DISK_DEPTH: u32 = 3;
+pub const DEFAULT_DISK_TOP: u32 = 20;
+pub const MAX_DISK_TOP: u32 = 1000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PatternSyntax {
@@ -91,6 +101,12 @@ pub enum DiscoveryRequest {
     CodeStats {
         path: Option<PathBuf>,
         include_ignored: bool,
+    },
+    DiskUsage {
+        path: Option<PathBuf>,
+        depth: u32,
+        top: u32,
+        size_mode: SizeMode,
     },
 }
 
@@ -159,6 +175,17 @@ pub struct CodeStatsJob {
     pub include_ignored: bool,
     pub limits: DiscoveryLimits,
 }
+/// `file` is the basename inside `root` when the measured path is a single file. Measured
+/// by axvern itself: no external CLI is involved.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskUsageJob {
+    pub root: String,
+    pub file: Option<String>,
+    pub depth: u32,
+    pub top: u32,
+    pub size_mode: SizeMode,
+    pub limits: DiscoveryLimits,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum DiscoveryJob {
@@ -168,6 +195,7 @@ pub enum DiscoveryJob {
     Read(ReadJob),
     CodeSearch(CodeSearchJob),
     CodeStats(CodeStatsJob),
+    DiskUsage(DiskUsageJob),
 }
 impl DiscoveryJob {
     /// Public command name, as reported in the response envelope.
@@ -179,6 +207,7 @@ impl DiscoveryJob {
             Self::Read(_) => "fs read",
             Self::CodeSearch(_) => "code search",
             Self::CodeStats(_) => "code stats",
+            Self::DiskUsage(_) => "system disk-usage",
         }
     }
     /// Result kind, as reported in the stored result.
@@ -190,6 +219,7 @@ impl DiscoveryJob {
             Self::Read(_) => "fs.read",
             Self::CodeSearch(_) => "code.search",
             Self::CodeStats(_) => "code.stats",
+            Self::DiskUsage(_) => "system.disk_usage",
         }
     }
     pub fn limits(&self) -> &DiscoveryLimits {
@@ -200,6 +230,7 @@ impl DiscoveryJob {
             Self::Read(j) => &j.limits,
             Self::CodeSearch(j) => &j.limits,
             Self::CodeStats(j) => &j.limits,
+            Self::DiskUsage(j) => &j.limits,
         }
     }
 }
@@ -272,6 +303,12 @@ pub struct LanguageStatItem {
     pub blanks: u64,
     pub embedded: Vec<EmbeddedStat>,
 }
+/// Bytes of the entry including everything below it; a parent's size contains its children.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskUsageItem {
+    pub path: String,
+    pub bytes: u64,
+}
 /// Variants are told apart by their required fields, so the order does not matter.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -281,11 +318,26 @@ pub enum DiscoveryItem {
     Entry(EntryItem),
     Code(CodeMatchItem),
     Stat(LanguageStatItem),
+    Usage(DiskUsageItem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DiscoverySummary {
+    /// Listed first: it is the only summary with `size_mode`.
+    DiskUsage {
+        root: String,
+        size_mode: SizeMode,
+        unit: String,
+        depth: u32,
+        top: u32,
+        /// The whole measured tree, counted once per hard link. Exact unless `lower_bound`.
+        total_bytes: u64,
+        /// Some part could not be measured, so the sizes are at least these values.
+        lower_bound: bool,
+        /// Entries below the root that were measured (the root itself is not counted).
+        entries: u64,
+    },
     Find {
         root: String,
         pattern: String,
@@ -400,6 +452,8 @@ pub enum WarningCode {
     BinaryFilesSkipped,
     /// The tool cannot apply ignore files outside a Git worktree.
     IgnoreRulesNotApplied,
+    /// A directory on another filesystem was not entered.
+    OtherFilesystemSkipped,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResultWarning {
