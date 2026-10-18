@@ -168,6 +168,8 @@ pub enum ErrorCode {
     InvalidPattern,
     InvalidTarget,
     TargetNotFound,
+    /// The directory is not inside a Git worktree.
+    NotARepository,
     UnsupportedEncoding,
     InvalidEncoding,
     InvalidConfig,

@@ -44,6 +44,10 @@ pub enum SizeMode {
 pub const DEFAULT_DISK_DEPTH: u32 = 3;
 pub const DEFAULT_DISK_TOP: u32 = 20;
 pub const MAX_DISK_TOP: u32 = 1000;
+pub const DEFAULT_PROCESS_LIMIT: u32 = 100;
+pub const MAX_PROCESS_LIMIT: u32 = 1000;
+/// Longest accepted `--match` text, in bytes.
+pub const MAX_PROCESS_MATCH: usize = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PatternSyntax {
@@ -107,6 +111,14 @@ pub enum DiscoveryRequest {
         depth: u32,
         top: u32,
         size_mode: SizeMode,
+    },
+    CodeDiff {
+        staged: bool,
+    },
+    Processes {
+        /// Case-sensitive literal looked for in the executable's basename.
+        matching: Option<String>,
+        limit: u32,
     },
 }
 
@@ -186,6 +198,21 @@ pub struct DiskUsageJob {
     pub size_mode: SizeMode,
     pub limits: DiscoveryLimits,
 }
+/// `root` is the top of the Git worktree. Measured by running a fixed, isolated `git diff`
+/// inside the worker.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeDiffJob {
+    pub root: String,
+    pub staged: bool,
+    pub limits: DiscoveryLimits,
+}
+/// A single snapshot read by axvern itself from the operating system.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessesJob {
+    pub matching: Option<String>,
+    pub limit: u32,
+    pub limits: DiscoveryLimits,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum DiscoveryJob {
@@ -196,6 +223,8 @@ pub enum DiscoveryJob {
     CodeSearch(CodeSearchJob),
     CodeStats(CodeStatsJob),
     DiskUsage(DiskUsageJob),
+    CodeDiff(CodeDiffJob),
+    Processes(ProcessesJob),
 }
 impl DiscoveryJob {
     /// Public command name, as reported in the response envelope.
@@ -208,6 +237,8 @@ impl DiscoveryJob {
             Self::CodeSearch(_) => "code search",
             Self::CodeStats(_) => "code stats",
             Self::DiskUsage(_) => "system disk-usage",
+            Self::CodeDiff(_) => "code diff",
+            Self::Processes(_) => "system processes",
         }
     }
     /// Result kind, as reported in the stored result.
@@ -220,6 +251,8 @@ impl DiscoveryJob {
             Self::CodeSearch(_) => "code.search",
             Self::CodeStats(_) => "code.stats",
             Self::DiskUsage(_) => "system.disk_usage",
+            Self::CodeDiff(_) => "code.diff",
+            Self::Processes(_) => "system.processes",
         }
     }
     pub fn limits(&self) -> &DiscoveryLimits {
@@ -231,6 +264,8 @@ impl DiscoveryJob {
             Self::CodeSearch(j) => &j.limits,
             Self::CodeStats(j) => &j.limits,
             Self::DiskUsage(j) => &j.limits,
+            Self::CodeDiff(j) => &j.limits,
+            Self::Processes(j) => &j.limits,
         }
     }
 }
@@ -309,6 +344,55 @@ pub struct DiskUsageItem {
     pub path: String,
     pub bytes: u64,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffComparison {
+    IndexToWorktree,
+    HeadToIndex,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffChange {
+    Added,
+    Deleted,
+    Modified,
+    Renamed,
+    /// File, symbolic link or submodule kind changed.
+    TypeChanged,
+}
+/// One hunk of a text diff. `patch` is for reading: a cut hunk is not guaranteed to apply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffHunk {
+    pub old_start: u64,
+    pub old_lines: u64,
+    pub new_start: u64,
+    pub new_lines: u64,
+    pub patch: String,
+}
+/// `old_path` is null for an added file and `new_path` for a deleted one. A binary file carries
+/// no hunks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffItem {
+    pub old_path: Option<String>,
+    pub new_path: Option<String>,
+    pub change: DiffChange,
+    pub binary: bool,
+    pub hunks: Vec<DiffHunk>,
+    /// Some hunks (or part of one) were left out to stay within the bounds.
+    pub patch_truncated: bool,
+}
+/// `pid` is only meaningful together with the summary's `observed_at`: PIDs are reused.
+/// Null fields could not be obtained for that process.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessItem {
+    pub pid: u32,
+    pub ppid: Option<u32>,
+    pub uid: Option<u32>,
+    pub name: String,
+    pub state: Option<String>,
+    pub rss_bytes: Option<u64>,
+    pub started_at: Option<String>,
+}
 /// Variants are told apart by their required fields, so the order does not matter.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -319,11 +403,28 @@ pub enum DiscoveryItem {
     Code(CodeMatchItem),
     Stat(LanguageStatItem),
     Usage(DiskUsageItem),
+    Diff(DiffItem),
+    Process(ProcessItem),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DiscoverySummary {
+    /// Listed first: it is the only summary with `comparison`.
+    CodeDiff {
+        comparison: DiffComparison,
+        /// Always false in this version: untracked files are never compared.
+        untracked_included: bool,
+        root: String,
+    },
+    /// The only summary with `observed_at`: the instant the table was read.
+    Processes {
+        observed_at: String,
+        limit: u32,
+        matching: Option<String>,
+        /// Processes seen before the filter and limit were applied.
+        scanned: u64,
+    },
     /// Listed first: it is the only summary with `size_mode`.
     DiskUsage {
         root: String,
@@ -454,6 +555,8 @@ pub enum WarningCode {
     IgnoreRulesNotApplied,
     /// A directory on another filesystem was not entered.
     OtherFilesystemSkipped,
+    /// A process ended while its entry was being read.
+    Disappeared,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResultWarning {

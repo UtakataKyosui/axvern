@@ -324,6 +324,12 @@ pub fn diagnose_scope_with_timeout(
             eza.level = CheckLevel::Warning;
         }
         checks.push(eza);
+        // `code diff` needs git, but a missing git must not fail the other discovery commands.
+        let mut git = adapter_tool(&tools::GIT, deadline);
+        if git.level == CheckLevel::Fail {
+            git.level = CheckLevel::Warning;
+        }
+        checks.push(git);
     }
     if matches!(scope, "performance" | "all") {
         checks.push(future_tool(
@@ -335,7 +341,6 @@ pub fn diagnose_scope_with_timeout(
     }
     if scope == "all" {
         for (tool, purpose) in [
-            ("git", "diff source of truth"),
             ("delta", "diff presentation"),
             ("dust", "disk usage"),
             ("procs", "process inspection"),

@@ -12,9 +12,11 @@ These commands are implemented in the source checkout. They validate inputs and 
 | `code search` | ast-grep | 0.51.0 | 0.51.0 |
 | `code stats` | tokei with JSON serialization | 15.0.0 | 15.0.0 |
 | `system disk-usage` | built in (no external CLI) | – | – |
+| `code diff` | git, run by axvern with a fixed isolated argv | 2.40.0 | 2.43.0 |
+| `system processes` | built in (`/proc` on Linux, `ps` elsewhere) | – | – |
 | `fs analyze` | fd + tokei | as above | as above |
 
-Pueue/client and daemon must be 4.0.4. `doctor --scope discovery` reports missing, unsupported and incapable builds. A version range is not evidence that every later release was tested. eza is optional: its display text cannot safely represent structured entries, so `fs list` uses fd. git/delta/dust/procs are optional, unprovided integrations and do not block the discovery gate.
+Pueue/client and daemon must be 4.0.4. `doctor --scope discovery` reports missing, unsupported and incapable builds. A version range is not evidence that every later release was tested. eza is optional: its display text cannot safely represent structured entries, so `fs list` uses fd. delta/dust/procs are optional, unprovided integrations and do not block the discovery gate. git is required only by `code diff`; `doctor` reports it as a warning when absent.
 
 Every discovery adapter checks its version before registration, using the same capability detector as doctor. An unsupported version, failed/unrecognized version probe, or tokei build without JSON support is refused with `unsupported_tool_capability`; a probe timeout does not authorize execution. Optional eza display support is diagnosed from 0.23.5 (the measured version); missing or incompatible eza produces a warning and does not block structured discovery.
 
@@ -59,6 +61,8 @@ axvern fs read FILE [--from-line 1] [--lines 80] [--wait 1s]
 axvern code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s]
 axvern code stats [PATH] [--include-ignored] [--wait 1s]
 axvern system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s]
+axvern code diff [--staged] [--wait 1s]
+axvern system processes [--match TEXT] [--limit 100] [--wait 1s]
 axvern fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s]
 ```
 
@@ -117,3 +121,26 @@ effect = "allow"
 `--size allocated` (default) reports the blocks the filesystem allocated; `--size apparent` reports logical length. The mode is always returned and never substituted. Units are integer bytes. A directory's own entry is counted and a parent's size contains its children, so the listed rows must not be added up: use `summary.total_bytes`. Hidden entries, ignored files and `.git` contents are measured (a capacity question, unlike code search). Symbolic links count as links and are never followed, including a link given explicitly as the target (the link itself is measured, not what it points to); `.git` and its subdirectories may be targeted directly; a directory on another filesystem is not entered (`other_filesystem_skipped` warning). A file with several hard links is counted once and attributed to the first path in byte order of its path components; the other links show 0.
 
 `--depth` (default 3, 1–32) only selects which rows are listed; the whole tree is measured within the usual budgets. `--top` (default 20, 1–1000) keeps the largest rows, ties ordered by path bytes, and is a request, not truncation. An unreadable path makes the result `partial` with `summary.lower_bound=true` (sizes are at least these values); reaching `max_entries` or the timeout is `truncated` with the same lower bound. A directory is read only as far as the remaining entry budget needs and the timeout allows, so a truncated walk measures a subset that is not promised to be the global path-order prefix. Non-UTF-8 names are counted in the totals, reported as an `invalid_encoding` error and not listed. `summary.entries` counts measured entries below the root. Sizes are not a point-in-time snapshot; entries that vanish during the walk produce a warning.
+
+## Code diff
+
+`code diff` compares the Git worktree that contains the current directory (the whole worktree, whatever subdirectory you are in). By default it compares index → worktree; `--staged` compares HEAD → index, and before the first commit the empty tree stands in for HEAD. Untracked files are not compared; `summary.untracked_included` is always `false`. Outside a worktree (including inside `.git`) it fails before registration with `not_a_repository`, exit 2. No arbitrary revisions, paths or git options are accepted.
+
+Git is the source of truth, but it is never run the way a user would run it. A plain `git diff --no-ext-diff --no-textconv` still starts the clean/process filter program that repository configuration attaches to a path (`qualities/scripts/git_filter_spike.py` reproduces it), so a "read" command could execute repository-chosen programs. axvern instead runs one fixed argv (`git diff --no-ext-diff --no-textconv --ignore-submodules=all --patch-with-raw -z -M50% [--cached]`) with a cleared environment, no user or system configuration, no pager, `core.fsmonitor=false`, no optional index locks, and `GIT_ATTR_SOURCE` set to the empty tree so no `.gitattributes` is read. `GIT_ATTR_SOURCE` does not cover `.git/info/attributes`; a repository whose `info/attributes` mentions `filter` or defines a macro is refused (`unsupported_capability`) both before registration and again before the run. Hooks, pagers and external diff drivers are never started, git's own state is not modified, and delta is not used: output is always plain text. A missing object (for example in a partial clone) makes the diff fail rather than fetch: lazy fetching is disabled with `GIT_NO_LAZY_FETCH=1` and, for Git older than 2.44, an empty transport allow-list (`GIT_ALLOW_PROTOCOL`) that no `protocol.*.allow` setting can override. A type change (for example file to symlink) is one entry whose hunks cover both the removal and the creation.
+
+Items are `old_path`, `new_path`, `change` (`added`, `deleted`, `modified`, `renamed`, `type_changed`), `binary`, `hunks` and `patch_truncated`. `old_path` is null for an added file and `new_path` for a deleted one. Renames use a fixed 50 % similarity; below it the change is an add and a delete. A binary file carries only this metadata and no content. A hunk holds its line range and the patch text (lossily decoded as UTF-8); a hunk is cut at 8 KiB and a file at 32 KiB, always on whole lines, and the item says `patch_truncated`. A cut patch is for reading and is not guaranteed to apply. Zero differences is a normal `done` result with no items. Paths that are not valid UTF-8 are reported as `invalid_encoding` errors (partial) and not listed. For Policy the pseudo-program is `axvern-code-diff`:
+
+```toml
+[[policy.rules]]
+id = "code-diff"
+command = "axvern-code-diff"
+effect = "allow"
+```
+
+## System processes
+
+`system processes` takes one snapshot of the process table; it is not a monitor and never sends signals, changes priority or elevates privileges. It is read by axvern itself, not procs, whose JSON has no executable-name column (the command is the whole argv), a start time without a zone and no marker for processes hidden by permissions (spike #23). For Policy the pseudo-program is `axvern-system-processes`.
+
+Items are `pid`, `ppid`, `uid`, `name`, `state`, `rss_bytes` and `started_at`, in ascending PID order; `null` means not obtained. `summary.observed_at` is when the table was read by the worker, not when the task was registered, and PIDs are reused, so a PID identifies a process only together with that time. `uid` is the real numeric owner (no name lookup). `state` is `running`, `sleeping`, `uninterruptible`, `stopped`, `zombie`, `idle`, `dead` or `other`. `rss_bytes` is resident memory in bytes. `started_at` is UTC and derived from the kernel boot time on Linux; on other systems it is null. The command line, environment and network information are never read.
+
+`name` is the basename of the executable when its link can be read, otherwise the kernel command name (at most 15 bytes; it can differ from the executable and for other users' processes may be the only name available). `--match TEXT` keeps processes whose `name` contains TEXT as a case-sensitive literal (non-empty, at most 256 bytes, no `/` or NUL); it is never matched against arguments. `--limit` is 1–1000 (default 100); a result longer than the limit is `truncated` with `max_items`, and `summary.scanned` then counts only what was examined. A process that ends while being read is a `disappeared` warning. A process that cannot be inspected for lack of permission is a `permission_denied` error and makes the result `partial` (still retrieved with exit 0); a process hidden entirely by the system (for example `hidepid`) cannot be detected. Zero matches is a normal `done` result.
