@@ -705,3 +705,23 @@ fn a_finished_log_rewritten_during_a_cut_short_scan_is_log_changed() {
         .unwrap();
     assert_eq!(err.code, ErrorCode::LogChanged);
 }
+
+#[test]
+fn a_range_stops_at_its_last_line_without_reading_the_next() {
+    let mut log = b"ok\n".to_vec();
+    log.extend(vec![b'x'; 1 << 20]);
+    log.extend_from_slice(b"\xff\n");
+    let budget = ScanBudget {
+        max_bytes: 1000,
+        timeout: Duration::from_secs(5),
+    };
+    let range = spec(QuerySelector::Range {
+        from_line: 1,
+        lines: 1,
+    });
+    let result = query::scan(Cursor::new(log), &range, &budget).unwrap();
+    assert_eq!(lines(&result), [(1, "ok")]);
+    assert!(result.scan_complete && !result.truncated);
+    assert_eq!(result.omitted_count, Some(0));
+    assert_eq!(result.scanned_bytes, 3);
+}

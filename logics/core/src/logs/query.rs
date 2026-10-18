@@ -324,12 +324,13 @@ pub fn scan(reader: impl Read, spec: &QuerySpec, budget: &ScanBudget) -> Result<
                             }
                             QuerySelector::Tail(_) => unreachable!("handled above"),
                         };
+                        // The last requested line ends the scan: the next line is never read.
+                        let last = matches!(selector, QuerySelector::Range { from_line, lines }
+                            if line.number >= *from_line && line.number - *from_line + 1 >= *lines);
                         if hit {
                             collector.offer(line);
-                        } else if let QuerySelector::Range { from_line, lines } = selector
-                            && line.number >= *from_line
-                            && line.number - *from_line >= *lines
-                        {
+                        }
+                        if last {
                             break true;
                         }
                     }
