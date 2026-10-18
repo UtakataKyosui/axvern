@@ -4,6 +4,7 @@ pub mod analyze;
 pub mod config;
 pub mod discovery;
 pub mod doctor;
+pub mod logs;
 pub mod parents;
 pub mod planner;
 pub mod policy;

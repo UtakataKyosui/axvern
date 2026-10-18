@@ -67,6 +67,12 @@ impl PueueAdapter {
         }
         Ok(())
     }
+    /// Reader for this daemon's retained task logs; see `logs::source` for why it reads files.
+    pub fn log_source(&self) -> Result<crate::logs::source::PueueLogFiles, Error> {
+        Ok(crate::logs::source::PueueLogFiles {
+            directory: crate::logs::source::pueue_directory(&self.config)?,
+        })
+    }
     pub fn check(&self) -> Result<(), Error> {
         self.version()?;
         self.list().map(|_| ())
