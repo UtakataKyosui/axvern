@@ -323,30 +323,13 @@ fn read_table(job: &ProcessesJob, deadline: Instant, scan: &mut Scan) -> Result<
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     let mut table: Vec<(u32, ProcessItem)> = Vec::new();
     for line in text.lines() {
-        // The command is last and may contain spaces; the five numeric columns are fixed.
-        let mut parts = line.trim_start().splitn(6, char::is_whitespace);
-        let mut next = || {
-            let mut word = parts.next()?;
-            while word.is_empty() {
-                word = parts.next()?;
-            }
-            Some(word)
-        };
-        let (Some(pid), Some(ppid), Some(uid), Some(state), Some(rss)) =
-            (next(), next(), next(), next(), next())
-        else {
+        let Some(([pid, ppid, uid, state, rss], command)) = parse_ps_row(line) else {
             continue;
         };
-        let command = parts.collect::<Vec<_>>().join(" ");
         let Ok(pid) = pid.parse::<u32>() else {
             continue;
         };
-        let name = command
-            .trim()
-            .rsplit('/')
-            .next()
-            .unwrap_or_default()
-            .to_owned();
+        let name = command.rsplit('/').next().unwrap_or_default().to_owned();
         if name.is_empty() {
             continue;
         }
@@ -376,6 +359,19 @@ fn read_table(job: &ProcessesJob, deadline: Instant, scan: &mut Scan) -> Result<
     Ok(())
 }
 
+/// `pid ppid uid state rss comm` as printed by `ps`, which right-aligns the numeric columns
+/// with runs of spaces. The five leading fields are taken across any amount of whitespace; the
+/// rest of the line is the command name, which may itself contain spaces.
+pub fn parse_ps_row(line: &str) -> Option<([&str; 5], &str)> {
+    let mut rest = line.trim_start();
+    let mut fields = [""; 5];
+    for slot in &mut fields {
+        let end = rest.find(char::is_whitespace)?;
+        *slot = &rest[..end];
+        rest = rest[end..].trim_start();
+    }
+    Some((fields, rest.trim_end()))
+}
 fn state_name(code: u8) -> String {
     match code {
         b'R' => "running",

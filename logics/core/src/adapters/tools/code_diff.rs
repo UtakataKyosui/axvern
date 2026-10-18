@@ -77,6 +77,13 @@ fn isolated(root: &Path) -> Command {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_PAGER", "cat")
+        // A missing object must fail the diff, never start a fetch from a promisor remote
+        // (which can run a helper, write objects or use the network). `GIT_NO_LAZY_FETCH` only
+        // exists since Git 2.44; the environment's protocol allow-list overrides every
+        // `protocol.*.allow` configuration and names no real transport, so older Git cannot
+        // reach a remote either.
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_ALLOW_PROTOCOL", "axvern-no-transport")
         .args(["--no-pager", "--no-optional-locks", "-C"])
         .arg(root)
         .args([
@@ -228,10 +235,38 @@ fn run(job: &CodeDiffJob, deadline: Instant) -> DiscoveryOutcome {
         return failed(ErrorCode::BackendFailure, "git diff failed");
     }
     let (entries, patch_start) = parse_raw(&out.stdout);
-    let chunks = split_patch(&out.stdout[patch_start..]);
+    let patch = &out.stdout[patch_start..];
+    let chunks = split_patch(patch);
+    // One chunk per entry, except that a type change is printed as a deletion plus a creation
+    // under the same `diff --git` line: those chunks belong to the one raw record.
+    let header = |range: &std::ops::Range<usize>| {
+        let text = &patch[range.clone()];
+        text.split(|&b| b == b'\n')
+            .next()
+            .unwrap_or_default()
+            .to_vec()
+    };
+    let mut cursor = 0;
+    let mut assigned: Vec<Option<std::ops::Range<usize>>> = Vec::new();
+    for entry in &entries {
+        let Some(first) = chunks.get(cursor) else {
+            assigned.push(None);
+            continue;
+        };
+        let mut range = first.clone();
+        cursor += 1;
+        if entry.change == DiffChange::TypeChanged {
+            let name = header(first);
+            while let Some(next) = chunks.get(cursor).filter(|c| header(c) == name) {
+                range.end = next.end;
+                cursor += 1;
+            }
+        }
+        assigned.push(Some(range));
+    }
+    let aligned = cursor == chunks.len() && (out.capped || assigned.iter().all(Option::is_some));
     let mut warnings = Vec::new();
     let mut reasons = Vec::new();
-    let aligned = chunks.len() == entries.len() || (out.capped && chunks.len() <= entries.len());
     if !aligned {
         warnings.push(ResultWarning {
             code: WarningCode::SourceChanged,
@@ -246,7 +281,7 @@ fn run(job: &CodeDiffJob, deadline: Instant) -> DiscoveryOutcome {
     let mut items = Vec::new();
     let mut partial = false;
     let mut errors = Vec::new();
-    let last = chunks.len().saturating_sub(1);
+    let last = entries.len().saturating_sub(1);
     for (i, entry) in entries.iter().enumerate() {
         let name = |p: &Option<Vec<u8>>| match p {
             None => Ok(None),
@@ -260,7 +295,10 @@ fn run(job: &CodeDiffJob, deadline: Instant) -> DiscoveryOutcome {
             ));
             continue;
         };
-        let chunk = aligned.then(|| chunks.get(i)).flatten();
+        let chunk = aligned
+            .then(|| assigned[i].clone())
+            .flatten()
+            .map(|range| &patch[range]);
         let (binary, hunks, cut) = match chunk {
             Some(text) => read_chunk(text, out.capped && i == last),
             None => (false, Vec::new(), true),
@@ -366,8 +404,8 @@ fn parse_raw(data: &[u8]) -> (Vec<Entry>, usize) {
     }
     (entries, pos)
 }
-/// Splits the patch text into one chunk per file, each starting at its `diff` header line.
-fn split_patch(patch: &[u8]) -> Vec<&[u8]> {
+/// Splits the patch text into one range per file section, each starting at its `diff` header.
+fn split_patch(patch: &[u8]) -> Vec<std::ops::Range<usize>> {
     let mut starts = Vec::new();
     let mut line = 0;
     while line < patch.len() {
@@ -386,7 +424,7 @@ fn split_patch(patch: &[u8]) -> Vec<&[u8]> {
     starts
         .iter()
         .enumerate()
-        .map(|(i, &s)| &patch[s..starts.get(i + 1).copied().unwrap_or(patch.len())])
+        .map(|(i, &s)| s..starts.get(i + 1).copied().unwrap_or(patch.len()))
         .collect()
 }
 /// `(binary, hunks, cut)` for one file's patch. `cut` also covers a patch the output cap ended.
@@ -403,7 +441,10 @@ fn read_chunk(chunk: &[u8], output_cut: bool) -> (bool, Vec<DiffHunk>, bool) {
         if line.starts_with("Binary files ") || line.starts_with("GIT binary patch") {
             binary = true;
         }
-        if line.starts_with("@@ ") {
+        if line.starts_with("diff --git ") {
+            // A second section of the same file (type change): its header text is not a hunk.
+            open = false;
+        } else if line.starts_with("@@ ") {
             match parse_header(line) {
                 Some(hunk) if used + line.len() <= MAX_FILE_PATCH_BYTES => {
                     used += line.len();

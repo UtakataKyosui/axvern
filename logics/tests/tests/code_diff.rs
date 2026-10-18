@@ -263,3 +263,87 @@ fn private_attributes_that_could_select_a_filter_are_refused_before_running() {
     fs::write(dir.join(".git/info/attributes"), "*.png binary\n").unwrap();
     assert!(tools::adapter(&prepared.job).preflight().is_ok());
 }
+
+#[test]
+fn a_missing_object_never_starts_a_fetch_from_a_promisor_remote() {
+    let temp = repo();
+    let dir = temp.path().canonicalize().unwrap();
+    fs::write(dir.join("t.txt"), "old content\n").unwrap();
+    commit_all(&dir);
+    // Drop the committed blob so the diff needs an object the repository does not have.
+    let blob = String::from_utf8(
+        Command::new("git")
+            .current_dir(&dir)
+            .args(["rev-parse", "HEAD:t.txt"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let blob = blob.trim();
+    fs::remove_file(dir.join(".git/objects").join(&blob[..2]).join(&blob[2..])).unwrap();
+    let marker = dir.join("MARKER");
+    let helper = dir.join("helper.sh");
+    fs::write(
+        &helper,
+        format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&helper, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    git(&dir, &["config", "extensions.partialClone", "origin"]);
+    git(&dir, &["config", "remote.origin.promisor", "true"]);
+    git(
+        &dir,
+        &[
+            "config",
+            "remote.origin.url",
+            &format!("ext::{} %S", helper.display()),
+        ],
+    );
+    git(&dir, &["config", "protocol.ext.allow", "always"]);
+    fs::write(dir.join("t.txt"), "new content\n").unwrap();
+    let outcome = run(&dir, false);
+    assert!(
+        !marker.exists(),
+        "no helper may be started to fetch the object"
+    );
+    assert_eq!(
+        outcome.state,
+        ChildState::Failed,
+        "a missing object fails the diff safely"
+    );
+}
+
+#[test]
+fn a_type_change_keeps_the_hunks_of_other_changed_files() {
+    let temp = repo();
+    let dir = temp.path().canonicalize().unwrap();
+    fs::write(dir.join("a.txt"), "one\n").unwrap();
+    fs::write(dir.join("b.txt"), "left\n").unwrap();
+    fs::write(dir.join("c.txt"), "right\n").unwrap();
+    commit_all(&dir);
+    fs::remove_file(dir.join("b.txt")).unwrap();
+    std::os::unix::fs::symlink("a.txt", dir.join("b.txt")).unwrap();
+    fs::write(dir.join("a.txt"), "two\n").unwrap();
+    fs::write(dir.join("c.txt"), "changed\n").unwrap();
+    let outcome = run(&dir, false);
+    assert!(
+        outcome.document.warnings.is_empty(),
+        "{:?}",
+        outcome.document.warnings
+    );
+    let items = items(&outcome);
+    assert_eq!(items.len(), 3);
+    let by = |name: &str| {
+        items
+            .iter()
+            .find(|i| i.new_path.as_deref() == Some(name))
+            .unwrap()
+    };
+    assert_eq!(by("b.txt").change, DiffChange::TypeChanged);
+    assert!(!by("b.txt").hunks.is_empty() && !by("b.txt").patch_truncated);
+    for name in ["a.txt", "c.txt"] {
+        assert_eq!(by(name).hunks.len(), 1, "{name} keeps its hunk");
+        assert!(!by(name).patch_truncated, "{name}");
+    }
+}

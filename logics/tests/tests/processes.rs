@@ -156,3 +156,23 @@ fn the_match_text_is_not_copied_into_the_registered_plan() {
     let text = format!("{:?}", plan.args);
     assert!(!text.contains("secret-service"), "{text}");
 }
+
+#[test]
+fn ps_rows_with_aligned_columns_and_spaced_names_are_parsed() {
+    use axvern_core::adapters::tools::processes::parse_ps_row;
+    let row = "      1       0     0 S 22960 supervisord";
+    assert_eq!(
+        parse_ps_row(row),
+        Some((["1", "0", "0", "S", "22960"], "supervisord"))
+    );
+    let spaced = "  412     1   501 Ss  8192 /Applications/Foo Bar.app/Contents/MacOS/Foo Bar  ";
+    assert_eq!(
+        parse_ps_row(spaced),
+        Some((
+            ["412", "1", "501", "Ss", "8192"],
+            "/Applications/Foo Bar.app/Contents/MacOS/Foo Bar"
+        ))
+    );
+    assert_eq!(parse_ps_row("1 0 0 S"), None);
+    assert_eq!(parse_ps_row(""), None);
+}
