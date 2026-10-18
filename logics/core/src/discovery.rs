@@ -409,6 +409,39 @@ pub fn prepare(
                 limits: limits.clone(),
             })
         }
+        DiscoveryRequest::CodeDiff { staged } => {
+            tools::require_supported(&tools::GIT)?;
+            let root = tools::code_diff::worktree_root(cwd)?;
+            if root.to_str().is_none() {
+                return Err(invalid(
+                    ErrorCode::InvalidEncoding,
+                    "path is not valid UTF-8",
+                ));
+            }
+            DiscoveryJob::CodeDiff(CodeDiffJob {
+                root: utf8(&root),
+                staged: *staged,
+                limits: limits.clone(),
+            })
+        }
+        DiscoveryRequest::Processes { matching, limit } => {
+            if !(1..=MAX_PROCESS_LIMIT).contains(limit) {
+                return Err(invalid(ErrorCode::InvalidInput, "limit must be 1..1000"));
+            }
+            if let Some(text) = matching
+                && (text.is_empty() || text.len() > MAX_PROCESS_MATCH || text.contains(['\0', '/']))
+            {
+                return Err(invalid(
+                    ErrorCode::InvalidInput,
+                    "match must be a non-empty name of at most 256 bytes, without '/'",
+                ));
+            }
+            DiscoveryJob::Processes(ProcessesJob {
+                matching: matching.clone(),
+                limit: *limit,
+                limits: limits.clone(),
+            })
+        }
     };
     let adapter = tools::adapter(&job);
     let plan = adapter.plan()?;
@@ -423,7 +456,7 @@ pub fn prepare(
 /// registered for it.
 pub fn ensure_tool(job: &DiscoveryJob, plan: &ExecutionPlan) -> Result<(), Error> {
     if tools::adapter(job).is_native() {
-        return Ok(());
+        return tools::adapter(job).preflight();
     }
     tools::locate(&plan.program).ok_or_else(|| {
         Error::new(

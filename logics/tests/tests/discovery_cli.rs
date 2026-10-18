@@ -225,6 +225,8 @@ fn help_lists_the_discovery_commands() {
         "code search",
         "code stats",
         "system disk-usage",
+        "code diff",
+        "system processes",
     ] {
         assert!(text.contains(command), "{command}");
     }
@@ -647,4 +649,41 @@ fn a_version_probe_timeout_does_not_authorize_an_unverified_tool() {
     assert_eq!(json["execution_id"], serde_json::Value::Null);
     assert!(!store.exists());
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+#[test]
+fn code_diff_and_processes_input_is_refused_with_exit_2_before_registration() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    let config = config(&dir, "");
+    for (args, error) in [
+        (vec!["code", "diff"], "not_a_repository"),
+        (vec!["code", "diff", "--staged"], "not_a_repository"),
+        (
+            vec!["code", "diff", "--staged", "--staged"],
+            "invalid_input",
+        ),
+        (vec!["code", "diff", "HEAD"], "invalid_input"),
+        (vec!["code", "diff", "--match", "x"], "invalid_input"),
+        (vec!["system", "processes", "--limit", "0"], "invalid_input"),
+        (
+            vec!["system", "processes", "--limit", "1001"],
+            "invalid_input",
+        ),
+        (vec!["system", "processes", "--match", ""], "invalid_input"),
+        (
+            vec!["system", "processes", "--match", "a", "--match", "b"],
+            "invalid_input",
+        ),
+        (vec!["system", "processes", "--staged"], "invalid_input"),
+        (vec!["system", "processes", "extra"], "invalid_input"),
+    ] {
+        let (code, json) = cli(&dir, &config, None, &args);
+        assert_eq!(code, 2, "{args:?}");
+        assert_eq!(json["error"]["code"], error, "{args:?}");
+        assert_eq!(json["execution_id"], serde_json::Value::Null);
+    }
+    // Unlisted by Policy: the pseudo-programs are refused without an exact rule.
+    let (code, json) = cli(&dir, &config, None, &["system", "processes"]);
+    assert_eq!((code, &json["error"]["code"]), (9, &"policy_denied".into()));
 }

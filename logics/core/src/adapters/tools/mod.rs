@@ -43,8 +43,10 @@ use std::{
 
 pub mod ast_grep;
 pub mod bat;
+pub mod code_diff;
 pub mod disk_usage;
 pub mod fd;
+pub mod processes;
 pub mod rg;
 mod scope;
 pub mod tokei;
@@ -105,6 +107,16 @@ pub const TOKEI: ToolSpec = ToolSpec {
     tested_version: "15.0.0",
     capable: tokei::has_json,
     feature: "JSON output support",
+};
+/// Source of truth for `code diff`. 2.40 introduced `GIT_ATTR_SOURCE`, which keeps a worktree's
+/// `.gitattributes` (and so its `filter=` drivers) from being consulted.
+pub const GIT: ToolSpec = ToolSpec {
+    name: "git",
+    purpose: "code diff source of truth",
+    min_version: [2, 40, 0],
+    tested_version: "2.43.0",
+    capable: any_build,
+    feature: "",
 };
 /// Display-only dependency of the opt-in ls replacement, never a structured path source.
 pub const EZA: ToolSpec = ToolSpec {
@@ -238,6 +250,8 @@ pub fn adapter(job: &DiscoveryJob) -> Box<dyn DiscoveryAdapter> {
         DiscoveryJob::CodeSearch(j) => Box::new(ast_grep::AstGrep(j.clone())),
         DiscoveryJob::CodeStats(j) => Box::new(tokei::Tokei(j.clone())),
         DiscoveryJob::DiskUsage(j) => Box::new(disk_usage::DiskUsage(j.clone())),
+        DiscoveryJob::CodeDiff(j) => Box::new(code_diff::CodeDiff(j.clone())),
+        DiscoveryJob::Processes(j) => Box::new(processes::Processes(j.clone())),
     }
 }
 
@@ -335,4 +349,73 @@ pub(crate) fn missing_tool(spec: &ToolSpec) -> ResultIssue {
         ErrorCode::MissingTool,
         format!("{} is not installed or not executable", spec.name),
     )
+}
+
+/// Output of a finished (or stopped) child process.
+pub(crate) struct Captured {
+    pub stdout: Vec<u8>,
+    /// More than `cap` bytes were produced; the child was stopped.
+    pub capped: bool,
+    pub timed_out: bool,
+    pub code: Option<i32>,
+}
+/// Runs `command` with stdin and stderr discarded and stdout kept up to `cap` bytes, stopping
+/// the child when the deadline passes. A spawn failure is `Err`.
+pub(crate) fn capture(
+    command: &mut Command,
+    deadline: std::time::Instant,
+    cap: usize,
+) -> std::io::Result<Captured> {
+    use std::{io::Read, process::Stdio, sync::mpsc, time::Instant};
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut out = child.stdout.take().expect("piped stdout");
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0u8; 16384];
+        while let Ok(n) = out.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut stdout = Vec::new();
+    let (mut capped, mut timed_out) = (false, false);
+    loop {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(wait.min(Duration::from_millis(200))) {
+            Ok(chunk) => {
+                let room = cap.saturating_sub(stdout.len());
+                stdout.extend_from_slice(&chunk[..chunk.len().min(room)]);
+                if chunk.len() > room {
+                    capped = true;
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if Instant::now() >= deadline {
+                    timed_out = true;
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let code = if capped || timed_out {
+        let _ = child.kill();
+        let _ = child.wait();
+        None
+    } else {
+        child.wait()?.code()
+    };
+    let _ = reader.join();
+    Ok(Captured {
+        stdout,
+        capped,
+        timed_out,
+        code,
+    })
 }

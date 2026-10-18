@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s] | system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s]";
+const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s] | system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s] | code diff [--staged] [--wait 1s] | system processes [--match TEXT] [--limit 100] [--wait 1s]";
 struct Input {
     command: String,
     config: Option<PathBuf>,
@@ -42,9 +42,13 @@ struct Input {
     lang: Option<String>,
     top: Option<u32>,
     size_mode: Option<SizeMode>,
+    matching: Option<String>,
+    process_limit: Option<u32>,
 }
 /// Flags that only the discovery commands accept, and which of them each command accepts.
-const FS_FLAGS: [&str; 15] = [
+const FS_FLAGS: [&str; 17] = [
+    "--staged",
+    "--match",
     "--top",
     "--size",
     "--depth",
@@ -84,6 +88,8 @@ fn fs_flags(command: &str) -> &'static [&'static str] {
         "code search" => &["--pattern", "--lang", "--include-ignored"],
         "code stats" => &["--include-ignored"],
         "system disk-usage" => &["--depth", "--top", "--size"],
+        "code diff" => &["--staged"],
+        "system processes" => &["--match"],
         _ => &[],
     }
 }
@@ -147,6 +153,8 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         lang: None,
         top: None,
         size_mode: None,
+        matching: None,
+        process_limit: None,
     };
     let mut positional = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -156,7 +164,8 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         if arg.starts_with('-') {
             // `--glob` selects the pattern syntax for find and takes a value for search.
             let switch = match arg {
-                "--include-ignored" | "--full-path" | "--ignore-case" | "--fixed-strings" => true,
+                "--include-ignored" | "--full-path" | "--ignore-case" | "--fixed-strings"
+                | "--staged" => true,
                 "--glob" => positional.starts_with(&["fs", "find"]),
                 _ => false,
             };
@@ -231,6 +240,9 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
                 "--extension" if !value.is_empty() => input
                     .extensions
                     .push(value.to_str().ok_or_else(invalid)?.into()),
+                "--match" if !value.is_empty() => {
+                    input.matching = Some(value.to_str().ok_or_else(invalid)?.into())
+                }
                 "--pattern" if !value.is_empty() => {
                     input.pattern = Some(value.to_str().ok_or_else(invalid)?.into())
                 }
@@ -303,6 +315,14 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
             input.command = format!("fs {sub}");
             input.fs_args = words;
         }
+        ["code", "diff"] if boundary == args.len() => input.command = "code diff".into(),
+        ["system", "processes"] if boundary == args.len() => {
+            input.command = "system processes".into();
+            input.process_limit = seen
+                .contains("--limit")
+                .then(|| u32::try_from(input.limit).ok())
+                .flatten();
+        }
         ["code", sub @ ("search" | "stats"), rest @ ..] => {
             let mut words: Vec<String> = rest.iter().map(|w| w.to_string()).collect();
             for word in &input.target {
@@ -349,7 +369,11 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         || (seen.contains("--scope") && input.command != "doctor")
         || (seen.contains("--wait") && input.command != "run" && !discovery)
         || (seen.contains("--request-id") && input.command != "run")
-        || (seen.contains("--limit") && !matches!(input.command.as_str(), "history" | "result"))
+        || (seen.contains("--limit")
+            && !matches!(
+                input.command.as_str(),
+                "history" | "result" | "system processes"
+            ))
         || ((seen.contains("--cursor") || seen.contains("--max-bytes"))
             && input.command != "result")
     {
@@ -359,7 +383,9 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
 }
 /// Commands that run an external tool in the background and store a [`DiscoveryDocument`].
 fn is_discovery(command: &str) -> bool {
-    command.starts_with("fs ") || command.starts_with("code ") || command == "system disk-usage"
+    command.starts_with("fs ")
+        || command.starts_with("code ")
+        || matches!(command, "system disk-usage" | "system processes")
 }
 fn discovery_request(input: &Input) -> Result<DiscoveryRequest, Error> {
     let path = |i: usize| input.fs_args.get(i).map(PathBuf::from);
@@ -415,6 +441,13 @@ fn discovery_request(input: &Input) -> Result<DiscoveryRequest, Error> {
             top: input.top.unwrap_or(DEFAULT_DISK_TOP),
             size_mode: input.size_mode.unwrap_or(SizeMode::Allocated),
         },
+        "code diff" => DiscoveryRequest::CodeDiff {
+            staged: switch("--staged"),
+        },
+        "system processes" => DiscoveryRequest::Processes {
+            matching: input.matching.clone(),
+            limit: input.process_limit.unwrap_or(DEFAULT_PROCESS_LIMIT),
+        },
         _ => return Err(invalid()),
     })
 }
@@ -428,6 +461,7 @@ fn error_exit(error: &Error) -> i32 {
         | ErrorCode::InvalidPattern
         | ErrorCode::InvalidTarget
         | ErrorCode::TargetNotFound
+        | ErrorCode::NotARepository
         | ErrorCode::UnsupportedEncoding
         | ErrorCode::InvalidEncoding
         | ErrorCode::InvalidCursor => 2,
@@ -687,7 +721,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
     }
     match input.command.as_str() {
         "run" | "fs list" | "fs find" | "fs search" | "fs read" | "code search" | "code stats"
-        | "system disk-usage" => {
+        | "system disk-usage" | "code diff" | "system processes" => {
             let p = run_plan.as_ref().expect("run plan");
             match std::env::current_exe()
                 .map_err(|_| axvern_core::store::RegistrationFailure {
@@ -1417,6 +1451,45 @@ fn human(response: &Response<Value>) {
             for item in items {
                 if let Some(section) = item["section"].as_str() {
                     print!("{section}\t");
+                }
+                if let Some(pid) = item["pid"].as_u64() {
+                    let field = |key: &str| match &item[key] {
+                        Value::Null => "-".to_owned(),
+                        Value::String(s) => visible(s),
+                        other => other.to_string(),
+                    };
+                    println!(
+                        "{pid}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        field("ppid"),
+                        field("uid"),
+                        field("state"),
+                        field("rss_bytes"),
+                        field("started_at"),
+                        field("name")
+                    );
+                    continue;
+                }
+                if let Some(change) = item["change"].as_str() {
+                    let side = |key: &str| item[key].as_str().map_or("-".to_owned(), visible);
+                    println!(
+                        "{change}\t{}\t{}{}",
+                        side("old_path"),
+                        side("new_path"),
+                        if item["binary"] == true {
+                            "\tbinary"
+                        } else {
+                            ""
+                        }
+                    );
+                    for hunk in item["hunks"].as_array().into_iter().flatten() {
+                        for line in hunk["patch"].as_str().unwrap_or("").lines() {
+                            println!("{}", visible(line));
+                        }
+                    }
+                    if item["patch_truncated"] == true {
+                        println!("patch_truncated: true");
+                    }
+                    continue;
                 }
                 if let (Some(path), Some(bytes)) = (item["path"].as_str(), item["bytes"].as_u64()) {
                     println!("{bytes}\t{}", visible(path));
