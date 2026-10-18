@@ -43,6 +43,7 @@ use std::{
 
 pub mod ast_grep;
 pub mod bat;
+pub mod disk_usage;
 pub mod fd;
 pub mod rg;
 mod scope;
@@ -219,6 +220,14 @@ pub trait DiscoveryAdapter {
     fn preflight(&self) -> Result<(), Error> {
         require_supported(self.tool())
     }
+    /// True when the worker measures in-process and there is no program to look up.
+    fn is_native(&self) -> bool {
+        false
+    }
+    /// The result of an in-process job; the worker then starts no child process.
+    fn run_native(&self, _deadline: std::time::Instant) -> Option<DiscoveryOutcome> {
+        None
+    }
 }
 pub fn adapter(job: &DiscoveryJob) -> Box<dyn DiscoveryAdapter> {
     match job {
@@ -228,6 +237,7 @@ pub fn adapter(job: &DiscoveryJob) -> Box<dyn DiscoveryAdapter> {
         DiscoveryJob::Read(j) => Box::new(bat::Bat(j.clone())),
         DiscoveryJob::CodeSearch(j) => Box::new(ast_grep::AstGrep(j.clone())),
         DiscoveryJob::CodeStats(j) => Box::new(tokei::Tokei(j.clone())),
+        DiscoveryJob::DiskUsage(j) => Box::new(disk_usage::DiskUsage(j.clone())),
     }
 }
 

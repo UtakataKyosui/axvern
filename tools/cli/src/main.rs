@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s]";
+const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s] | system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s]";
 struct Input {
     command: String,
     config: Option<PathBuf>,
@@ -40,9 +40,13 @@ struct Input {
     globs: Vec<String>,
     pattern: Option<String>,
     lang: Option<String>,
+    top: Option<u32>,
+    size_mode: Option<SizeMode>,
 }
 /// Flags that only the discovery commands accept, and which of them each command accepts.
-const FS_FLAGS: [&str; 13] = [
+const FS_FLAGS: [&str; 15] = [
+    "--top",
+    "--size",
     "--depth",
     "--include-ignored",
     "--glob",
@@ -79,6 +83,7 @@ fn fs_flags(command: &str) -> &'static [&'static str] {
         "fs read" => &["--from-line", "--lines"],
         "code search" => &["--pattern", "--lang", "--include-ignored"],
         "code stats" => &["--include-ignored"],
+        "system disk-usage" => &["--depth", "--top", "--size"],
         _ => &[],
     }
 }
@@ -140,6 +145,8 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         globs: Vec::new(),
         pattern: None,
         lang: None,
+        top: None,
+        size_mode: None,
     };
     let mut positional = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -196,6 +203,14 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
                 }
                 "--depth" => {
                     input.depth = Some(u32::try_from(digits(value)?).map_err(|_| invalid())?)
+                }
+                "--top" => input.top = Some(u32::try_from(digits(value)?).map_err(|_| invalid())?),
+                "--size" => {
+                    input.size_mode = Some(match value.to_str() {
+                        Some("allocated") => SizeMode::Allocated,
+                        Some("apparent") => SizeMode::Apparent,
+                        _ => return Err(invalid()),
+                    })
                 }
                 "--context" => {
                     input.context = Some(u32::try_from(digits(value)?).map_err(|_| invalid())?)
@@ -301,6 +316,17 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
             input.command = format!("code {sub}");
             input.fs_args = words;
         }
+        ["system", "disk-usage", rest @ ..] => {
+            let mut words: Vec<String> = rest.iter().map(|w| w.to_string()).collect();
+            for word in &input.target {
+                words.push(word.to_str().ok_or_else(invalid)?.to_owned());
+            }
+            if words.len() > 1 {
+                return Err(invalid());
+            }
+            input.command = "system disk-usage".into();
+            input.fs_args = words;
+        }
         _ => return Err(invalid()),
     }
     let discovery = is_discovery(&input.command);
@@ -333,7 +359,7 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
 }
 /// Commands that run an external tool in the background and store a [`DiscoveryDocument`].
 fn is_discovery(command: &str) -> bool {
-    command.starts_with("fs ") || command.starts_with("code ")
+    command.starts_with("fs ") || command.starts_with("code ") || command == "system disk-usage"
 }
 fn discovery_request(input: &Input) -> Result<DiscoveryRequest, Error> {
     let path = |i: usize| input.fs_args.get(i).map(PathBuf::from);
@@ -382,6 +408,12 @@ fn discovery_request(input: &Input) -> Result<DiscoveryRequest, Error> {
         "code stats" => DiscoveryRequest::CodeStats {
             path: path(0),
             include_ignored: switch("--include-ignored"),
+        },
+        "system disk-usage" => DiscoveryRequest::DiskUsage {
+            path: path(0),
+            depth: input.depth.unwrap_or(DEFAULT_DISK_DEPTH),
+            top: input.top.unwrap_or(DEFAULT_DISK_TOP),
+            size_mode: input.size_mode.unwrap_or(SizeMode::Allocated),
         },
         _ => return Err(invalid()),
     })
@@ -654,7 +686,8 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
         }
     }
     match input.command.as_str() {
-        "run" | "fs list" | "fs find" | "fs search" | "fs read" | "code search" | "code stats" => {
+        "run" | "fs list" | "fs find" | "fs search" | "fs read" | "code search" | "code stats"
+        | "system disk-usage" => {
             let p = run_plan.as_ref().expect("run plan");
             match std::env::current_exe()
                 .map_err(|_| axvern_core::store::RegistrationFailure {
@@ -1384,6 +1417,10 @@ fn human(response: &Response<Value>) {
             for item in items {
                 if let Some(section) = item["section"].as_str() {
                     print!("{section}\t");
+                }
+                if let (Some(path), Some(bytes)) = (item["path"].as_str(), item["bytes"].as_u64()) {
+                    println!("{bytes}\t{}", visible(path));
+                    continue;
                 }
                 if let Some(language) = item["language"].as_str() {
                     println!(

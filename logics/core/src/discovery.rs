@@ -130,6 +130,55 @@ fn directory_or_file(path: Option<&Path>, cwd: &Path) -> Result<(PathBuf, Option
         ))
     }
 }
+/// Target of `system disk-usage`. Unlike code search it measures capacity, so `.git` is a valid
+/// target, and a symbolic link given explicitly is measured as the link itself, not its target.
+fn disk_target(path: Option<&Path>, cwd: &Path) -> Result<(PathBuf, Option<String>), Error> {
+    let requested = path.map_or_else(|| cwd.to_path_buf(), |p| cwd.join(p));
+    let meta = fs::symlink_metadata(&requested).map_err(|e| target_error(&e, &requested))?;
+    let utf8_name = |p: &Path| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned)
+            .ok_or_else(|| invalid(ErrorCode::InvalidEncoding, "path is not valid UTF-8"))
+    };
+    if meta.file_type().is_symlink()
+        && let Some(parent) = requested.parent()
+    {
+        let name = utf8_name(&requested)?;
+        let parent = parent
+            .canonicalize()
+            .map_err(|e| target_error(&e, parent))?;
+        if parent.to_str().is_none() {
+            return Err(invalid(
+                ErrorCode::InvalidEncoding,
+                "path is not valid UTF-8",
+            ));
+        }
+        return Ok((parent, Some(name)));
+    }
+    let target = requested
+        .canonicalize()
+        .map_err(|e| target_error(&e, &requested))?;
+    if target.to_str().is_none() {
+        return Err(invalid(
+            ErrorCode::InvalidEncoding,
+            "path is not valid UTF-8",
+        ));
+    }
+    if target.is_dir() {
+        fs::read_dir(&target).map_err(|e| target_error(&e, &target))?;
+        Ok((target, None))
+    } else if target.is_file() {
+        let name = utf8_name(&target)?;
+        let parent = target.parent().map(Path::to_path_buf).unwrap_or_default();
+        Ok((parent, Some(name)))
+    } else {
+        Err(invalid(
+            ErrorCode::InvalidTarget,
+            "path is neither a directory nor a regular file",
+        ))
+    }
+}
 fn depth(depth: u32) -> Result<u32, Error> {
     if (1..=MAX_DEPTH).contains(&depth) {
         Ok(depth)
@@ -340,6 +389,26 @@ pub fn prepare(
                 limits: limits.clone(),
             })
         }
+        DiscoveryRequest::DiskUsage {
+            path,
+            depth: d,
+            top,
+            size_mode,
+        } => {
+            let d = depth(*d)?;
+            if !(1..=MAX_DISK_TOP).contains(top) {
+                return Err(invalid(ErrorCode::InvalidInput, "top must be 1..1000"));
+            }
+            let (root, file) = disk_target(path.as_deref(), cwd)?;
+            DiscoveryJob::DiskUsage(DiskUsageJob {
+                root: utf8(&root),
+                file,
+                depth: d,
+                top: *top,
+                size_mode: *size_mode,
+                limits: limits.clone(),
+            })
+        }
     };
     let adapter = tools::adapter(&job);
     let plan = adapter.plan()?;
@@ -353,6 +422,9 @@ pub fn prepare(
 /// The tool must be installed, and capable of what the job needs, before a task is
 /// registered for it.
 pub fn ensure_tool(job: &DiscoveryJob, plan: &ExecutionPlan) -> Result<(), Error> {
+    if tools::adapter(job).is_native() {
+        return Ok(());
+    }
     tools::locate(&plan.program).ok_or_else(|| {
         Error::new(
             ErrorCode::MissingTool,
@@ -510,6 +582,13 @@ pub fn run_worker(
     let (mut m, mut file) = results::reserve_or_record(store, settings, id)?;
     let budget = m.reserved();
     let adapter = tools::adapter(job);
+    if adapter.is_native() {
+        let deadline = Instant::now() + Duration::from_millis(job.limits().timeout_ms);
+        let outcome = adapter
+            .run_native(deadline)
+            .unwrap_or_else(|| unreachable!());
+        return finish_worker(store, id, job, &mut m, &mut file, budget, outcome);
+    }
     let mut normalizer = match adapter.normalizer(budget.saturating_sub(HEADER_SLACK * 2)) {
         Ok(n) => n,
         Err(error) => {
@@ -521,14 +600,25 @@ pub fn run_worker(
     let deadline = Instant::now() + Duration::from_millis(job.limits().timeout_ms);
     let (exit, stderr) = execute(plan, normalizer.as_mut(), deadline);
     let outcome = normalizer.finish(&exit, &stderr);
+    finish_worker(store, id, job, &mut m, &mut file, budget, outcome)
+}
+fn finish_worker(
+    store: &ExecutionStore,
+    id: &ExecutionId,
+    job: &DiscoveryJob,
+    m: &mut results::Manifest,
+    file: &mut File,
+    budget: u64,
+    outcome: DiscoveryOutcome,
+) -> Result<i32, Error> {
     let (state, exit_code) = (outcome.state, outcome.exit_code);
     m.complete(job.kind(), state, exit_code);
     let mut document = outcome.document;
-    let saved = write_artifact(&mut file, &mut document, budget).and_then(|bytes| {
-        results::publish_available(store, id, &mut m, bytes, document.completeness.truncated)
+    let saved = write_artifact(file, &mut document, budget).and_then(|bytes| {
+        results::publish_available(store, id, m, bytes, document.completeness.truncated)
     });
     if let Err(error) = saved {
-        results::record_persistence_failure(store, id, &mut m, error);
+        results::record_persistence_failure(store, id, m, error);
     }
     Ok(match state {
         ChildState::Done => 0,

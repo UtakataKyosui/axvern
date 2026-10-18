@@ -169,6 +169,46 @@ fn policy_refuses_unlisted_tools_and_a_missing_tool_is_reported() {
 }
 
 #[test]
+fn disk_usage_input_is_refused_with_exit_2_before_registration() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().canonicalize().unwrap();
+    let config = config(&dir, "");
+    for (args, error) in [
+        (vec!["system", "disk-usage", "--top", "0"], "invalid_input"),
+        (
+            vec!["system", "disk-usage", "--top", "1001"],
+            "invalid_input",
+        ),
+        (
+            vec!["system", "disk-usage", "--depth", "0"],
+            "invalid_input",
+        ),
+        (
+            vec!["system", "disk-usage", "--depth", "33"],
+            "invalid_input",
+        ),
+        (
+            vec!["system", "disk-usage", "--size", "blocks"],
+            "invalid_input",
+        ),
+        (
+            vec!["system", "disk-usage", "--include-ignored"],
+            "invalid_input",
+        ),
+        (vec!["system", "disk-usage", "a", "b"], "invalid_input"),
+        (vec!["system", "disk-usage", "missing"], "target_not_found"),
+    ] {
+        let (code, json) = cli(&dir, &config, None, &args);
+        assert_eq!(code, 2, "{args:?}");
+        assert_eq!(json["error"]["code"], error, "{args:?}");
+        assert_eq!(json["execution_id"], serde_json::Value::Null);
+    }
+    // Unlisted by Policy: the pseudo-program is refused without an exact rule.
+    let (code, json) = cli(&dir, &config, None, &["system", "disk-usage"]);
+    assert_eq!((code, &json["error"]["code"]), (9, &"policy_denied".into()));
+}
+
+#[test]
 fn help_lists_the_discovery_commands() {
     let out =
         Command::new(std::env::var_os("AXVERN_TEST_BIN").expect("use moon run qualities:test"))
@@ -184,6 +224,7 @@ fn help_lists_the_discovery_commands() {
         "fs analyze",
         "code search",
         "code stats",
+        "system disk-usage",
     ] {
         assert!(text.contains(command), "{command}");
     }
