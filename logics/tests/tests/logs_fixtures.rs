@@ -632,3 +632,76 @@ fn the_pueue_directory_comes_from_the_daemon_configuration() {
     fs::write(&config, "shared:\n  use_unix_socket: true\n").unwrap();
     assert!(pueue_directory(&config).unwrap().ends_with("pueue"));
 }
+
+#[test]
+fn selectors_see_the_whole_line_not_just_the_retained_prefix() {
+    let mut line = "x".repeat(QUERY_DEFAULT_MAX_BYTES * 3);
+    line.push_str(" needle FATAL tail\nnext\n");
+    let mut small = spec(matching("needle"));
+    small.max_bytes = QUERY_MIN_MAX_BYTES;
+    let hit = scan(line.as_bytes(), &small);
+    assert_eq!(hit.items.len(), 1);
+    assert!(hit.items[0].line_truncated && hit.items[0].text.len() <= QUERY_MIN_MAX_BYTES);
+    small.selector = QuerySelector::Errors;
+    assert_eq!(scan(line.as_bytes(), &small).items[0].line, 1);
+    // A needle that straddles read-buffer boundaries is still found, and one that does not exist is not.
+    for pad in [0usize, 1, 65535, 65536, 65537, 131071] {
+        let log = format!("{}needle\n", "y".repeat(pad));
+        let mut wide = spec(matching("needle"));
+        wide.max_bytes = QUERY_MIN_MAX_BYTES;
+        assert_eq!(scan(log.as_bytes(), &wide).items.len(), 1, "{pad}");
+        wide.selector = matching("needlex");
+        assert!(scan(log.as_bytes(), &wide).items.is_empty(), "{pad}");
+    }
+    // A word cut by the buffer boundary is not an independent word on either side.
+    let log = format!("{}error\n", "e".repeat(65533));
+    assert!(
+        scan(log.as_bytes(), &spec(QuerySelector::Errors))
+            .items
+            .is_empty()
+    );
+}
+#[test]
+fn a_range_near_u64_max_does_not_overflow() {
+    let result = scan(
+        b"a\nb\nc\n",
+        &spec(QuerySelector::Range {
+            from_line: u64::MAX,
+            lines: 1000,
+        }),
+    );
+    assert!(result.items.is_empty() && result.scan_complete);
+}
+#[test]
+fn recall_refuses_nul_inline_like_query_does() {
+    let temp = tempfile::tempdir().unwrap();
+    let files = pueue_dir(temp.path());
+    fs::write(files.path(7), b"ok\0bad").unwrap();
+    let err = recall::recall_opened(
+        &id(),
+        open(&files, ChildState::Done).unwrap(),
+        &recall_spec(None),
+        None,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(err.code, ErrorCode::InvalidEncoding);
+}
+#[test]
+fn a_finished_log_rewritten_during_a_cut_short_scan_is_log_changed() {
+    let temp = tempfile::tempdir().unwrap();
+    let files = pueue_dir(temp.path());
+    fs::write(files.path(7), "e error\n".repeat(500)).unwrap();
+    let opened = open(&files, ChildState::Done).unwrap();
+    // Same size, new content: only the exact check can notice.
+    std::thread::sleep(Duration::from_millis(20));
+    fs::write(files.path(7), "e fatal\n".repeat(500)).unwrap();
+    let budget = ScanBudget {
+        max_bytes: 100,
+        timeout: Duration::from_secs(5),
+    };
+    let err = logs::query_opened(&id(), opened, &spec(QuerySelector::Errors), &budget)
+        .err()
+        .unwrap();
+    assert_eq!(err.code, ErrorCode::LogChanged);
+}

@@ -34,6 +34,8 @@ pub struct QueryScan {
 }
 
 struct Line {
+    /// Whether the selector's predicate held anywhere in the whole line, kept or not.
+    hit: bool,
     number: u64,
     text: String,
     truncated: bool,
@@ -51,6 +53,7 @@ struct Lines<R: Read> {
     scanned: u64,
     started: Instant,
     budget: ScanBudget,
+    probe: Probe,
 }
 fn io_failure(error: &std::io::Error) -> Error {
     match error.kind() {
@@ -61,7 +64,7 @@ fn io_failure(error: &std::io::Error) -> Error {
     }
 }
 impl<R: Read> Lines<R> {
-    fn new(reader: R, cap: usize, budget: ScanBudget) -> Self {
+    fn new(reader: R, cap: usize, budget: ScanBudget, probe: Probe) -> Self {
         Self {
             reader: BufReader::with_capacity(64 * 1024, reader),
             cap,
@@ -69,6 +72,7 @@ impl<R: Read> Lines<R> {
             scanned: 0,
             started: Instant::now(),
             budget,
+            probe,
         }
     }
     /// `\n` and `\r\n` end a line; a last line without a terminator is still a line.
@@ -76,6 +80,7 @@ impl<R: Read> Lines<R> {
         let mut kept: Vec<u8> = Vec::new();
         let mut dropped = false;
         let mut any = false;
+        let mut probe = self.probe.fresh();
         loop {
             if self.scanned >= self.budget.max_bytes
                 || self.started.elapsed() >= self.budget.timeout
@@ -96,6 +101,8 @@ impl<R: Read> Lines<R> {
                 Some(at) => (&window[..at], Some(at + 1)),
                 None => (window, None),
             };
+            // The predicate sees every byte of the line; only the output copy is capped.
+            probe.feed(segment);
             let space = self.cap.saturating_sub(kept.len());
             kept.extend_from_slice(&segment[..segment.len().min(space)]);
             dropped |= segment.len() > space;
@@ -112,6 +119,7 @@ impl<R: Read> Lines<R> {
         }
         let text = decode(kept, dropped, self.number)?;
         Ok(Next::Line(Line {
+            hit: probe.finish(),
             number: self.number,
             text,
             truncated: dropped,
@@ -148,27 +156,112 @@ fn decode(mut bytes: Vec<u8>, cut: bool, number: u64) -> Result<String, Error> {
 }
 /// Independent word `error`, `failed`, `fatal` or `panic`, ASCII case-insensitive (rule version 1).
 pub fn is_error_candidate(line: &str) -> bool {
-    const WORDS: [&str; 4] = ["error", "failed", "fatal", "panic"];
-    let bytes = line.as_bytes();
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut i = 0;
-    while i < bytes.len() {
-        if word(bytes[i]) {
-            let start = i;
-            while i < bytes.len() && word(bytes[i]) {
-                i += 1;
-            }
-            if WORDS
+    let mut probe = Probe::Errors(ErrorWords::default());
+    probe.feed(line.as_bytes());
+    probe.finish()
+}
+#[derive(Clone, Default)]
+pub struct ErrorWords {
+    word: [u8; 7],
+    len: usize,
+    hit: bool,
+}
+impl ErrorWords {
+    fn close(&mut self) {
+        const WORDS: [&str; 4] = ["error", "failed", "fatal", "panic"];
+        if self.len > 0
+            && self.len <= 6
+            && WORDS
                 .iter()
-                .any(|w| bytes[start..i].eq_ignore_ascii_case(w.as_bytes()))
-            {
-                return true;
+                .any(|w| self.word[..self.len].eq_ignore_ascii_case(w.as_bytes()))
+        {
+            self.hit = true;
+        }
+        self.len = 0;
+    }
+    fn feed(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            if b.is_ascii_alphanumeric() || b == b'_' {
+                if self.len < self.word.len() {
+                    self.word[self.len] = b;
+                }
+                self.len = self.len.saturating_add(1);
+            } else {
+                self.close();
             }
-        } else {
-            i += 1;
         }
     }
-    false
+}
+/// Streaming per-line predicate, so a match beyond the retained prefix is still found.
+#[derive(Clone)]
+pub enum Probe {
+    Off,
+    Literal {
+        needle: Vec<u8>,
+        carry: Vec<u8>,
+        hit: bool,
+    },
+    Errors(ErrorWords),
+}
+impl Probe {
+    fn for_selector(selector: &QuerySelector) -> Self {
+        match selector {
+            QuerySelector::Match(text) => Probe::Literal {
+                needle: text.as_bytes().to_vec(),
+                carry: Vec::new(),
+                hit: false,
+            },
+            QuerySelector::Errors => Probe::Errors(ErrorWords::default()),
+            _ => Probe::Off,
+        }
+    }
+    fn fresh(&self) -> Self {
+        match self {
+            Probe::Off => Probe::Off,
+            Probe::Literal { needle, .. } => Probe::Literal {
+                needle: needle.clone(),
+                carry: Vec::new(),
+                hit: false,
+            },
+            Probe::Errors(_) => Probe::Errors(ErrorWords::default()),
+        }
+    }
+    fn feed(&mut self, bytes: &[u8]) {
+        match self {
+            Probe::Off => {}
+            Probe::Errors(words) => words.feed(bytes),
+            Probe::Literal { needle, carry, hit } => {
+                if *hit {
+                    return;
+                }
+                let mut buffer = std::mem::take(carry);
+                buffer.extend_from_slice(bytes);
+                let first = needle[0];
+                let mut at = 0;
+                while let Some(offset) = buffer[at..].iter().position(|b| *b == first) {
+                    at += offset;
+                    if buffer[at..].starts_with(needle) {
+                        *hit = true;
+                        return;
+                    }
+                    at += 1;
+                }
+                // Keep only what could still start a match that spans into the next chunk.
+                let keep = needle.len() - 1;
+                *carry = buffer[buffer.len().saturating_sub(keep)..].to_vec();
+            }
+        }
+    }
+    fn finish(mut self) -> bool {
+        match &mut self {
+            Probe::Off => false,
+            Probe::Literal { hit, .. } => *hit,
+            Probe::Errors(words) => {
+                words.close();
+                words.hit
+            }
+        }
+    }
 }
 struct Collector {
     limit: usize,
@@ -209,7 +302,12 @@ impl Collector {
 }
 pub fn scan(reader: impl Read, spec: &QuerySpec, budget: &ScanBudget) -> Result<QueryScan, Error> {
     spec.validate()?;
-    let mut lines = Lines::new(reader, spec.max_bytes, *budget);
+    let mut lines = Lines::new(
+        reader,
+        spec.max_bytes,
+        *budget,
+        Probe::for_selector(&spec.selector),
+    );
     match &spec.selector {
         QuerySelector::Tail(n) => scan_tail(&mut lines, spec, *n),
         selector => {
@@ -220,8 +318,7 @@ pub fn scan(reader: impl Read, spec: &QuerySpec, budget: &ScanBudget) -> Result<
                     Next::Stopped => break false,
                     Next::Line(line) => {
                         let hit = match selector {
-                            QuerySelector::Match(needle) => line.text.contains(needle.as_str()),
-                            QuerySelector::Errors => is_error_candidate(&line.text),
+                            QuerySelector::Match(_) | QuerySelector::Errors => line.hit,
                             QuerySelector::Range { from_line, lines } => {
                                 line.number >= *from_line && line.number - from_line < *lines
                             }
@@ -230,7 +327,8 @@ pub fn scan(reader: impl Read, spec: &QuerySpec, budget: &ScanBudget) -> Result<
                         if hit {
                             collector.offer(line);
                         } else if let QuerySelector::Range { from_line, lines } = selector
-                            && line.number >= from_line + lines
+                            && line.number >= *from_line
+                            && line.number - *from_line >= *lines
                         {
                             break true;
                         }

@@ -100,12 +100,15 @@ pub fn recall_opened(
                 return Err(changed());
             }
             log.handle.reader.verify_unchanged(!log.partial)?;
-            let text = String::from_utf8(bytes).map_err(|_| {
-                Error::new(
-                    ErrorCode::InvalidEncoding,
-                    "the log is not valid UTF-8 text; use --output FILE to save the raw bytes",
-                )
-            })?;
+            let text = String::from_utf8(bytes)
+                .ok()
+                .filter(|text| !text.contains('\0'))
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::InvalidEncoding,
+                        "the log is not valid UTF-8 text; use --output FILE to save the raw bytes",
+                    )
+                })?;
             output["encoding"] = json!("utf-8");
             output["text"] = json!(text);
             if serde_json::to_vec(&output).map_or(true, |v| v.len() > RECALL_INLINE_BYTES) {

@@ -124,10 +124,8 @@ pub fn query_opened(
 ) -> Result<LogReport, Error> {
     spec.validate()?;
     let scan = query::scan(&mut log.handle.reader, spec, budget)?;
-    // A finished log read to the end must be unchanged; a running one may only have grown.
-    log.handle
-        .reader
-        .verify_unchanged(!log.partial && scan.scan_complete)?;
+    // A finished log must be unchanged however far the scan got; a running one may only have grown.
+    log.handle.reader.verify_unchanged(!log.partial)?;
     let mut output = payload_base("query", id, &log);
     output["selector"] = match &spec.selector {
         QuerySelector::Match(text) => json!({"match": text}),
