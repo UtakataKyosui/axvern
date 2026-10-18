@@ -156,21 +156,7 @@ impl Walk<'_> {
                         size(self.job, &meta)
                     };
                     if meta.is_dir() {
-                        let listing = fs::read_dir(&path).map(|rd| {
-                            let mut names: Vec<Vec<u8>> = rd
-                                .filter_map(Result::ok)
-                                .map(|e| e.file_name().as_bytes().to_vec())
-                                .collect();
-                            names.sort();
-                            names
-                        });
-                        let names = match listing {
-                            Ok(names) => names,
-                            Err(e) => {
-                                self.unreadable(&e, &rel);
-                                Vec::new()
-                            }
-                        };
+                        let names = self.list(&path, &rel);
                         let index = self.nodes.len();
                         self.nodes.push(Node {
                             path: rel.clone(),
@@ -248,6 +234,36 @@ impl Walk<'_> {
             }
         }
         result
+    }
+    /// Names in byte order. Reading stops at the deadline and after one name more than the
+    /// remaining entry budget, so a huge directory can neither outrun the timeout nor be held
+    /// in memory whole; the walk then ends on the budget as for any other bound.
+    fn list(&mut self, path: &Path, rel: &Option<String>) -> Vec<Vec<u8>> {
+        let reader = match fs::read_dir(path) {
+            Ok(reader) => reader,
+            Err(e) => {
+                self.unreadable(&e, rel);
+                return Vec::new();
+            }
+        };
+        let room = self.job.limits.max_entries.saturating_sub(self.entries);
+        let mut names: Vec<Vec<u8>> = Vec::new();
+        for (count, entry) in reader.enumerate() {
+            if count % 1024 == 0 && Instant::now() >= self.deadline {
+                self.stop.get_or_insert(TruncationReason::Timeout);
+                self.lower_bound = true;
+                break;
+            }
+            match entry {
+                Ok(entry) => names.push(entry.file_name().as_bytes().to_vec()),
+                Err(e) => self.unreadable(&e, rel),
+            }
+            if names.len() as u64 > room {
+                break;
+            }
+        }
+        names.sort();
+        names
     }
     fn unreadable(&mut self, e: &std::io::Error, rel: &Option<String>) {
         self.lower_bound = true;

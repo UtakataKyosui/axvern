@@ -219,6 +219,18 @@ fn entry_and_time_budgets_truncate_and_set_the_lower_bound() {
         !exact.document.completeness.truncated,
         "an exact fit is complete"
     );
+    // A directory larger than the budget is read only as far as the budget needs.
+    let tight = run_with(
+        temp.path(),
+        request(1, 20, SizeMode::Apparent),
+        limits(1000, 1),
+        60000,
+    );
+    assert_eq!(
+        tight.document.completeness.truncation_reasons,
+        [TruncationReason::MaxEntries]
+    );
+    assert_eq!(summary(&tight).2, 1);
     let late = run_with(
         temp.path(),
         request(1, 20, SizeMode::Apparent),
