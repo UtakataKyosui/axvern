@@ -39,11 +39,10 @@ fn rows(outcome: &DiscoveryOutcome) -> Vec<&ProcessItem> {
         })
         .collect()
 }
-/// A child with a recognisable executable name, a secret argument and a secret environment.
+/// A child (`sh`) with a secret argument and a secret environment.
 fn sleeper() -> Child {
-    Command::new("sleep")
-        .arg("30")
-        .arg("ARGV_SECRET_MARKER")
+    Command::new("sh")
+        .args(["-c", "while :; do sleep 1; done", "ARGV_SECRET_MARKER"])
         .env("ENV_SECRET_MARKER", "x")
         .stdin(Stdio::null())
         .spawn()
@@ -82,12 +81,12 @@ fn a_snapshot_lists_processes_in_pid_order_with_an_observation_time() {
 #[test]
 fn match_is_a_case_sensitive_literal_on_the_executable_name_only() {
     let mut child = sleeper();
-    let found = run(request(Some("sleep"), 1000));
+    let found = run(request(Some("sh"), 1000));
     let pids: Vec<u32> = rows(&found).iter().map(|r| r.pid).collect();
     assert!(pids.contains(&child.id()), "{pids:?}");
-    assert!(rows(&found).iter().all(|r| r.name.contains("sleep")));
+    assert!(rows(&found).iter().all(|r| r.name.contains("sh")));
     // Not case-insensitive, and not matched against the argument list.
-    for text in ["SLEEP", "ARGV_SECRET_MARKER", "30"] {
+    for text in ["SH", "ARGV_SECRET_MARKER", "while"] {
         let outcome = run(request(Some(text), 1000));
         assert!(
             !rows(&outcome).iter().any(|r| r.pid == child.id()),
