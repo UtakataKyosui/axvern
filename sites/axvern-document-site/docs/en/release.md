@@ -75,3 +75,29 @@ Local tests without the strict environment may skip absent tools; that is useful
 AC-27–30/32 are defined in Issue #45 (2026-10-18) and mapped above; AC-31 is excluded from the v0.2 gate; saved `result` artifacts do not imply future query/recall guarantees. Requirement Issues still name eza for structured listings and stronger scope/depth behavior than some tools can provide; the fd decision and documented tool limitations need to be reconciled in those Issues before declaring the Epic complete. Text/code search and statistics now share the depth-32 and `.gitignore` contract, verified by `scope_live.rs` on Linux/macOS. The native ast-grep syntax-error detector remains best-effort, and tokei still cannot report a reliable count of skipped unknown/binary files.
 
 Historical macOS measurements are in `qualities/evidence/18-macos.md`, `19-macos.md`, `20-macos.md`, and the optional-adapter spike `23-macos.md`. They describe the environment measured at that time; the new strict CI transcript is the evidence for this revision. Schema-1 additive fields may be rejected by older binaries, so downgrade compatibility is not promised. Release numbering, distribution and publication remain separate decisions.
+
+## v0.3 Retrieve acceptance (#3 / #24–#27, #51–#53)
+
+`query` and `recall` are implemented over the Pueue log that still exists; `logs` is deliberately not a command. The behaviour, limits and retention are in the [retrieve guide](/retrieve). Measurements and the spike are in `qualities/evidence/24-27-retrieve.md`; the macOS run and the Mojo contract extension are still owed, so the cross-platform gate is not claimed. Remote Issues are not closed by these checks.
+
+| Requirement / boundary | Executable coverage in `logics/tests/tests` |
+| --- | --- |
+| AC-08 / FR-QUERY-002–006 | `logs_fixtures.rs` (`match_is_literal_case_sensitive_and_numbers_original_lines`, `error_candidates_use_independent_words_only`, `tail_returns_the_last_lines_with_exact_numbers`, `range_is_one_based_and_beyond_the_end_is_empty`), `logs_live.rs`: matching lines carry line number, execution ID and condition |
+| AC-09 / FR-QUERY-007 | `logs_live.rs` (`query_and_recall_read_the_log_without_running_the_command_again`): repeated selectors, one counter line, one history entry |
+| AC-10 / FR-QUERY-008, 013 | `logs_live.rs` (`removed_or_deleted_logs_are_explicit_and_consistent_with_history`), `logs_fixtures.rs` (`the_reader_distinguishes_available_partial_missing_and_unreadable`): `expired` / `log_missing`, no invented result |
+| AC-11 / FR-QUERY-010 | `logs_live.rs` (`a_running_task_gives_a_partial_snapshot_and_keeps_running`), `logs_fixtures.rs` (`a_running_log_is_a_fixed_snapshot_that_may_keep_growing`) |
+| AC-12 / FR-QUERY-009 | `logs_live.rs` (`huge_logs_and_long_lines_stay_within_bounded_memory`), `logs_fixtures.rs` (`limits_truncate_and_count_what_was_omitted`, `a_huge_single_line_is_capped_without_cutting_a_character`) |
+| FR-QUERY-011 | stream is always `combined` (`logs_fixtures.rs`, `logs_live.rs`) |
+| AC-SPEC-51-01 | `logs_cli.rs` (`malformed_query_and_recall_invocations_exit_2`), `logs_fixtures.rs` (`invalid_specs_are_rejected`): two selectors → exit 2, no backend access |
+| AC-SPEC-51-02 | `logs_fixtures.rs` (`range_is_one_based_and_beyond_the_end_is_empty`, `match_is_literal_case_sensitive_and_numbers_original_lines`): zero lines → empty `items`, exit 0 |
+| AC-SPEC-51-03 | `logs_live.rs` (`a_running_task_gives_a_partial_snapshot_and_keeps_running`): `partial_log=true`, task continues |
+| AC-SPEC-51-04 | `logs_live.rs` (`removed_or_deleted_logs_are_explicit_and_consistent_with_history`): `log_missing`, exit 11 |
+| AC-SPEC-51-05 | `logs_fixtures.rs` (`scan_budget_stops_work_and_never_invents_tail_line_numbers`), `logs_live.rs` (`huge_logs_and_long_lines_stay_within_bounded_memory`): `scan_complete=false`, exit 11, ~9.5 MiB peak RSS |
+| AC-SPEC-52-01 | `logs_fixtures.rs` (`recall_returns_small_logs_inline_and_refuses_to_pretend_for_large_ones`): complete text, exit 0 |
+| AC-SPEC-52-02 | `logs_live.rs` (`invalid_encoding_and_inline_limits_have_distinct_results`): `output_too_large`, exit 11, no truncated text |
+| AC-SPEC-52-03 | `logs_fixtures.rs` (`recall_output_never_overwrites_follows_links_or_leaves_partial_files`): `output_exists`, exit 15, nothing overwritten |
+| AC-SPEC-52-04 | `logs_live.rs` (`removed_or_deleted_logs_are_explicit_and_consistent_with_history`): `log_missing`, no file published |
+| AC-SPEC-52-05 | `logs_live.rs` (`invalid_encoding_and_inline_limits_have_distinct_results`), `logs_fixtures.rs` (`recall_output_streams_bytes_to_a_new_private_file`): non-UTF-8 saved byte-identically with `encoding=bytes` metadata |
+| AC-SPEC-53-01 | `logs_cli.rs`: `logs` is an unknown subcommand, exit 2, nothing registered; `usage_documents_the_retrieve_commands` shows it is absent from help |
+| AC-SPEC-53-02/03 | Documented mapping (`query --tail`, `recall`) in the retrieve guide; both paths covered by the rows above |
+| AC-31 | Retention and loss are stated in the retrieve guide; saved `result` artifacts and raw Pueue logs have separate lifetimes (`removed_or_deleted_logs_are_explicit_and_consistent_with_history`) |
