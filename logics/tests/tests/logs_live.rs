@@ -367,6 +367,35 @@ fn huge_logs_and_long_lines_stay_within_bounded_memory() {
 }
 /// Runs the public CLI and returns its output with the peak resident set size in KiB.
 fn measured(q: &Queue, config: &Path, args: &[&str]) -> (std::process::Output, u64) {
+    if Path::new("/proc/self/status").exists() {
+        measured_proc(q, config, args)
+    } else {
+        measured_time(q, config, args)
+    }
+}
+/// Without procfs (macOS), `/usr/bin/time -l` reports the peak in bytes after the child exits.
+fn measured_time(q: &Queue, config: &Path, args: &[&str]) -> (std::process::Output, u64) {
+    let mut out = Command::new("/usr/bin/time")
+        .arg("-l")
+        .arg(std::env::var_os("AXVERN_TEST_BIN").unwrap())
+        .current_dir(q._temp.path())
+        .env_remove("AXVERN_CONFIG")
+        .arg("--config")
+        .arg(config)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let report = String::from_utf8_lossy(&out.stderr).into_owned();
+    let bytes = report
+        .lines()
+        .find_map(|l| l.trim().strip_suffix("maximum resident set size"))
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .expect("`/usr/bin/time -l` did not report a maximum resident set size");
+    out.stderr.clear();
+    (out, bytes / 1024)
+}
+fn measured_proc(q: &Queue, config: &Path, args: &[&str]) -> (std::process::Output, u64) {
     use std::io::Read;
     let mut child = Command::new(std::env::var_os("AXVERN_TEST_BIN").unwrap())
         .current_dir(q._temp.path())

@@ -1,6 +1,6 @@
 # Issues #24–#27 implementation evidence
 
-Date: 2026-10-18. Platform: Linux x86_64 (container, uid 0). Pueue 4.0.4 built from crates.io (`cargo install pueue --version =4.0.4 --locked`). The macOS run is still owed (see "Not verified").
+Date: 2026-10-18. Platform: Linux x86_64 (container, uid 0). Pueue 4.0.4 built from crates.io (`cargo install pueue --version =4.0.4 --locked`). The macOS run is recorded in "macOS run" below.
 
 ## Spike: how to read a retained Pueue log (#24)
 
@@ -30,6 +30,18 @@ Log: 94,877,522 bytes (1.2 M ordinary lines, one 8 MiB line, final `error:` line
 
 Other states exercised against the real daemon: running (partial snapshot while the task continues, then complete), `pueue clean` (`expired`, matching `history`), log file deleted (`log_missing`), non-UTF-8/NUL (`invalid_encoding`; raw bytes saved with `--output`), 200 KB log over the inline limit (`output_too_large`), 300 KB single line (cut at 64 KiB, `line_truncated`), existing output (`output_exists`, 15). The access-denied case (`permission_denied`, 4) is skipped when the tests run as root (mode bits are ignored); the fixture test has the same guard.
 
+## macOS run
+
+Date: 2026-10-27. macOS 27.0 arm64, Pueue 4.0.4, a debug build of the CLI. `logs_fixtures.rs` (23), `logs_cli.rs` (2) and `logs_live.rs` (6) all pass against a real daemon, which also confirms the `<pueue_directory>/task_logs/<id>.log` layout on macOS. `VmHWM` does not exist there, so the live test reads the peak from `/usr/bin/time -l` when `/proc` is absent.
+
+| Call (94,877,522-byte log) | Peak RSS |
+| --- | --- |
+| `query --match "line 1199999"` | 8.6 MiB |
+| `query --errors` | 8.6 MiB |
+| `query --tail 3` | 8.6 MiB |
+| `query --from-line 10 --lines 5` | 8.6 MiB |
+| `recall --output FILE` | 8.8 MiB |
+
 ## Re-run guarantee (AC-08 to AC-12, AC-31)
 
 `query_and_recall_read_the_log_without_running_the_command_again` registers a Python program that appends one line to a counter file, then runs 3 × (match, errors, tail, range, empty match, recall) and a `recall --output`. The counter stays at one line and `history` lists one execution.
@@ -43,6 +55,5 @@ Other states exercised against the real daemon: running (partial snapshot while 
 
 ## Not verified here
 
-- macOS (the pinned reference platform of the other evidence files): `VmHWM` is Linux-only, so the memory table needs `/usr/bin/time -l` there. The `task_logs` layout should be confirmed against the macOS Pueue 4.0.4 data directory.
 - The Mojo CLI contract cases were not extended or run (Mojo is not installed).
 - Parent (analysis) IDs: the `invalid_target` response is implemented; it is not covered by an automated test because registering a parent needs fd and tokei.
