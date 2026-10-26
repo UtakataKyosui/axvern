@@ -6,3 +6,9 @@
 **/node_modules/
 sites/axvern-document-site/doc_build/
 **/__pycache__/
+
+# Agent local state (shared settings and skills remain tracked)
+/.claude/worktrees/
+/.claude/compactions/
+/.claude/settings.local.json
+/CLAUDE.local.md

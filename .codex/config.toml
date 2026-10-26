@@ -1,0 +1,3 @@
+# Shared repository defaults; model and credentials stay in user settings.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"

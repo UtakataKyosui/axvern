@@ -31,6 +31,8 @@ jobs:
         run: |
           python3 qualities/scripts/test_ci_plan.py
           python3 qualities/scripts/test_discovery_tools.py
+          python3 qualities/scripts/test_project_gate.py
+          python3 qualities/scripts/test_agent_hook.py
           python3 qualities/scripts/ci_plan.py
 
   fmt:
