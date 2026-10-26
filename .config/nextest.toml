@@ -1,0 +1,3 @@
+[profile.ci]
+# Report every failing test instead of stopping at the first one.
+fail-fast = false

@@ -1,6 +1,10 @@
 {
-  "$schema":  "https://raw.githubusercontent.com/jetify-com/devbox/0.18.4/.schema/devbox.schema.json",
-  "packages": ["moon@2.5.6", "pueue@4.0.4"],
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.18.4/.schema/devbox.schema.json",
+  "packages": [
+    "moon@2.5.6",
+    "pueue@4.0.4",
+    "cargo-nextest@0.9.146"
+  ],
   "shell": {
     "init_hook": [
       "echo 'Welcome to devbox!' > /dev/null"

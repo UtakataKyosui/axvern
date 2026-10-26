@@ -2,6 +2,7 @@
 
 `devbox run test` invokes Moon's `qualities:verify` and `qualities:pueue-spike`.
 Rust tests receive the built public CLI through `AXVERN_TEST_BIN`; use the Moon runner rather than bare Cargo tests for CLI integration coverage.
+`qualities:test` runs the workspace tests with cargo-nextest 0.9.146 (included in devbox) when available, plus `cargo test --doc` because nextest skips doctests; without nextest it falls back to `cargo test`. `AXVERN_REQUIRE_NEXTEST=1` turns a missing nextest into a failure. The `ci` profile in `.config/nextest.toml` disables fail-fast and adds no retries.
 
 `qualities:test` builds and runs the Mojo evaluator in `cli_contract/`. `scripts/cli_contract.py` only locates the toolchain, builds the executable and records timings; JSON parsing, schema validation and case evaluation run in Mojo. The evaluator converts external JSON into typed `Response`, `ExecutionId`, `State`, `ErrorCode` and optional output/error values before evaluating CLI results. Python's standard library is used through Mojo's supported interoperability layer only for OS/process plumbing and strict byte-to-UTF-8 decoding; the evaluator still requires a shared Python runtime. Backend lifecycle, successful registration and wait semantics remain covered by the Rust integration tests.
 
@@ -22,16 +23,38 @@ Probes hold non-TTY stdin open to detect prompt hangs, use private config/cwd, t
 ## CIの実行範囲とキャッシュ
 
 PRはそのPRのベースからの差分、mainへのpushは直前のコミットからの差分で判定する。
-Rust変更はワークスペース全体のfmt/check/clippy/build/testとPueue実機検証、
-サイト変更はBiome/build、Markdown変更はリンク確認（導入済みブランチ）を実行する。
+`changes` ジョブの判定結果（rust/site/links）で、以下のジョブ単位で実行を切り替える。
 CI・品質スクリプト・Moon設定など未知のパスと差分取得失敗は全チェックへ戻す。
 Issue追記案だけの変更は実行チェックを省略する。ファイル削除も判定に含める。
 PRの同期ごとにPR全体を再判定するため、過去の失敗した変更が対象から外れることはない。
 
-Cargo registry/gitとdebug/release成果物はOS・アーキテクチャ・ツールチェーン・
-manifest/lockfileで分離し、Pueue 4.0.4のインストールとpnpmストアもキャッシュする。
+| ジョブ | 条件 | ランナー | 内容 |
+|---|---|---|---|
+| `fmt` | rust | Ubuntu | `qualities:fmt` |
+| `rust` | rust | Ubuntu/macOS | Clippy、build、test、Pueue spike、release smoke、eza spike、証跡 artifact |
+| `site` | site | Ubuntu | Biome check、build |
+| `links` | links | Ubuntu | 内部リンク検査（導入済みブランチ） |
+| `quality` | 常時 | Ubuntu | 上記の集約。失敗・キャンセルがあれば失敗、スキップは成功扱い |
+
+Clippy は `--all-targets` で check を兼ねるため、CI は `qualities:check` を個別に実行しない。
+Linux 以外専用のコードがあるため Clippy は両 OS で実行する。
+テストは `AXVERN_REQUIRE_NEXTEST=1` と `NEXTEST_PROFILE=ci` で nextest を必須にし、失敗しても残りのテストを実行する。
+`rust` ジョブの各ゲートはセットアップ成功後に互いに独立して実行し、
+一つの失敗で他の証跡が欠けないようにする（test と eza spike は build 成功が前提）。
+
+Cargo registry/git と依存クレートの成果物は `Swatinem/rust-cache` が
+ランナーイメージ・ツールチェーン・lockfile 単位でキャッシュする。
+ワークスペースのクレートは保存前に除くため、コミットごとにエントリは増えない。
+Pueue・discovery CLI・eza・cargo-nextest の `cargo install` 結果はランナーイメージ（`ImageOS`）と版で、
+pnpm ストアは lockfile で分離してキャッシュする。
+キャッシュがないツールは個別の target ディレクトリで並列にビルドし、
+後続ゲートの成否に関わらずインストール直後に保存する。
+release smoke の `cargo install` は直前のリリースビルドを `target/` から再利用する。
 テスト結果・実機検証の証跡はキャッシュしない。Rust変更時は関連チェックを必ず再実行する。
 feature branchのpushとPRの二重実行を避け、古い同一PRの実行はキャンセルする。
+mainの実行はキャッシュを更新するためキャンセルしない。
+キャッシュは7日間アクセスがないと消えるため、mainで週2回（日・水 18:00 UTC）定期実行する。
+定期実行には差分の基準がないため全チェックを実行する。
 
 ## v0.2 discovery acceptance
 

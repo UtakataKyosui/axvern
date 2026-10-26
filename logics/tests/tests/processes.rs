@@ -45,6 +45,9 @@ fn sleeper() -> Child {
         .args(["-c", "while :; do sleep 1; done", "ARGV_SECRET_MARKER"])
         .env("ENV_SECRET_MARKER", "x")
         .stdin(Stdio::null())
+        // Killing `sh` leaves its `sleep` briefly alive; do not let it hold the test's output.
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .unwrap()
 }
