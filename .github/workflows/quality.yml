@@ -97,12 +97,18 @@ jobs:
         with:
           path: ${{ runner.temp }}/eza
           key: eza-v2-${{ env.IMAGE_OS }}-${{ runner.arch }}-0.23.5-rust1.98.0
+      - uses: actions/cache/restore@v4
+        id: nextest
+        with:
+          path: ${{ runner.temp }}/nextest
+          key: nextest-v1-${{ env.IMAGE_OS }}-${{ runner.arch }}-0.9.146-rust1.98.0
       - name: Install missing pinned CLIs in parallel
-        if: steps.pueue.outputs.cache-hit != 'true' || steps.discovery.outputs.cache-hit != 'true' || steps.eza.outputs.cache-hit != 'true'
+        if: steps.pueue.outputs.cache-hit != 'true' || steps.discovery.outputs.cache-hit != 'true' || steps.eza.outputs.cache-hit != 'true' || steps.nextest.outputs.cache-hit != 'true'
         env:
           PUEUE_HIT: ${{ steps.pueue.outputs.cache-hit }}
           DISCOVERY_HIT: ${{ steps.discovery.outputs.cache-hit }}
           EZA_HIT: ${{ steps.eza.outputs.cache-hit }}
+          NEXTEST_HIT: ${{ steps.nextest.outputs.cache-hit }}
         run: |
           pids=()
           install() {  # root crate version
@@ -118,6 +124,7 @@ jobs:
             install discovery tokei 15.0.0
           fi
           [[ "$EZA_HIT" == true ]] || install eza eza 0.23.5
+          [[ "$NEXTEST_HIT" == true ]] || install nextest cargo-nextest 0.9.146
           failed=0
           for entry in "${pids[@]}"; do
             if ! wait "${entry%%:*}"; then failed=1; cat "$RUNNER_TEMP/install-${entry#*:}.log"; fi
@@ -139,6 +146,11 @@ jobs:
         with:
           path: ${{ runner.temp }}/eza
           key: ${{ steps.eza.outputs.cache-primary-key }}
+      - if: steps.nextest.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/nextest
+          key: ${{ steps.nextest.outputs.cache-primary-key }}
       - name: Install pinned ast-grep CLI
         run: npm install --prefix "$RUNNER_TEMP/ast-grep" @ast-grep/cli@0.51.0
       - id: ready
@@ -147,6 +159,7 @@ jobs:
           {
             echo "$RUNNER_TEMP/pueue/bin"
             echo "$RUNNER_TEMP/discovery/bin"
+            echo "$RUNNER_TEMP/nextest/bin"
             echo "$RUNNER_TEMP/ast-grep/node_modules/.bin"
           } >> "$GITHUB_PATH"
 
@@ -163,6 +176,8 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           AXVERN_REQUIRE_DISCOVERY_TOOLS: '1'
+          AXVERN_REQUIRE_NEXTEST: '1'
+          NEXTEST_PROFILE: ci
         run: moon run qualities:test 2>&1 | tee -a target/quality.log
       - name: Pueue spike
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}

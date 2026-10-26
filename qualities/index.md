@@ -2,6 +2,7 @@
 
 `devbox run test` invokes Moon's `qualities:verify` and `qualities:pueue-spike`.
 Rust tests receive the built public CLI through `AXVERN_TEST_BIN`; use the Moon runner rather than bare Cargo tests for CLI integration coverage.
+`qualities:test` runs the workspace tests with cargo-nextest 0.9.146 (included in devbox) when available, plus `cargo test --doc` because nextest skips doctests; without nextest it falls back to `cargo test`. `AXVERN_REQUIRE_NEXTEST=1` turns a missing nextest into a failure. The `ci` profile in `.config/nextest.toml` disables fail-fast and adds no retries.
 
 `qualities:test` builds and runs the Mojo evaluator in `cli_contract/`. `scripts/cli_contract.py` only locates the toolchain, builds the executable and records timings; JSON parsing, schema validation and case evaluation run in Mojo. The evaluator converts external JSON into typed `Response`, `ExecutionId`, `State`, `ErrorCode` and optional output/error values before evaluating CLI results. Python's standard library is used through Mojo's supported interoperability layer only for OS/process plumbing and strict byte-to-UTF-8 decoding; the evaluator still requires a shared Python runtime. Backend lifecycle, successful registration and wait semantics remain covered by the Rust integration tests.
 
@@ -37,13 +38,14 @@ PRの同期ごとにPR全体を再判定するため、過去の失敗した変�
 
 Clippy は `--all-targets` で check を兼ねるため、CI は `qualities:check` を個別に実行しない。
 Linux 以外専用のコードがあるため Clippy は両 OS で実行する。
+テストは `AXVERN_REQUIRE_NEXTEST=1` と `NEXTEST_PROFILE=ci` で nextest を必須にし、失敗しても残りのテストを実行する。
 `rust` ジョブの各ゲートはセットアップ成功後に互いに独立して実行し、
 一つの失敗で他の証跡が欠けないようにする（test と eza spike は build 成功が前提）。
 
 Cargo registry/git と依存クレートの成果物は `Swatinem/rust-cache` が
 ランナーイメージ・ツールチェーン・lockfile 単位でキャッシュする。
 ワークスペースのクレートは保存前に除くため、コミットごとにエントリは増えない。
-Pueue・discovery CLI・eza の `cargo install` 結果はランナーイメージ（`ImageOS`）と版で、
+Pueue・discovery CLI・eza・cargo-nextest の `cargo install` 結果はランナーイメージ（`ImageOS`）と版で、
 pnpm ストアは lockfile で分離してキャッシュする。
 キャッシュがないツールは個別の target ディレクトリで並列にビルドし、
 後続ゲートの成否に関わらずインストール直後に保存する。
