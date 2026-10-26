@@ -76,6 +76,6 @@ devbox run test
 pnpm --dir sites/axvern-document-site dev
 ```
 
-品質ゲートは Rust fmt/check/Clippy/build/test、サイト check/build/内部リンク検査、隔離 Pueue spike、隔離 install smoke を実行します。CI は Ubuntu/macOS の証拠を artifact に保存します。
+品質ゲートは Rust fmt/check/Clippy/build/test、サイト check/build/内部リンク検査、隔離 Pueue spike、隔離 install smoke を実行します。CI は Rust の Clippy/build/test と実機検証を Ubuntu/macOS で、fmt・サイト・リンク検査を Ubuntu だけで実行し（Clippy が check を兼ねる）、Rust ジョブの証拠を artifact に保存します。
 
 完全なv0.2実機ゲートにはfd 10.5.0、rg 15.2.0、bat 0.26.1、ast-grep 0.51.0、tokei 15.0.0（JSON対応）が必要です。CIは固定版を導入し、`AXVERN_REQUIRE_DISCOVERY_TOOLS=1` で依存不足によるスキップを失敗にします。ローカルの任意スキップはv0.2受入完了の証拠にはしません。

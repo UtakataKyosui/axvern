@@ -7,10 +7,15 @@ permissions:
   contents: read
 concurrency:
   group: quality-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # main runs warm the shared caches; only superseded PR runs are cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+defaults:
+  run:
+    shell: bash
 jobs:
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       rust: ${{ steps.plan.outputs.rust }}
       site: ${{ steps.plan.outputs.site }}
@@ -24,8 +29,23 @@ jobs:
           python3 qualities/scripts/test_ci_plan.py
           python3 qualities/scripts/test_discovery_tools.py
           python3 qualities/scripts/ci_plan.py
-  verify:
+
+  fmt:
     needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
+      - run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+      - run: moon run qualities:fmt
+
+  rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -36,55 +56,38 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # Moon resolves the configured default branch even for explicit task runs.
-      - run: git show-ref --verify --quiet refs/heads/main || git branch main origin/main
-      - uses: actions/setup-node@v4
-        if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.site == 'true'
+      - uses: ./.github/actions/setup-moon
+      - run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+      # Runner image variables are not in the env expression context.
+      - run: echo "IMAGE_OS=$ImageOS" >> "$GITHUB_ENV"
+      # Caches registry/git and dependency artifacts keyed by toolchain and lockfile;
+      # workspace crates are pruned, so entries do not grow per commit.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          node-version: 24.22.0
-      - if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.site == 'true'
-        run: npm install --global @moonrepo/cli@2.5.6 pnpm@12.11.2
-      - if: needs.changes.outputs.rust == 'true'
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          key: ${{ env.IMAGE_OS }}
       - uses: actions/setup-python@v5
-        if: needs.changes.outputs.rust == 'true'
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: qualities/mojo-requirements.txt
       - name: Install pinned Mojo compiler for CLI contract tests
-        if: needs.changes.outputs.rust == 'true'
         run: |
           python -m venv target/mojo-env
           target/mojo-env/bin/python -m pip install --require-hashes -r qualities/mojo-requirements.txt
       - uses: actions/cache@v4
-        if: needs.changes.outputs.rust == 'true'
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/debug
-            target/release
-          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml', 'Cargo.lock') }}-${{ github.sha }}
-          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml', 'Cargo.lock') }}-
-      - uses: actions/cache@v4
         id: pueue
-        if: needs.changes.outputs.rust == 'true'
         with:
           path: ${{ runner.temp }}/pueue
-          key: pueue-v1-${{ runner.os }}-${{ runner.arch }}-4.0.4-rust-1.98.0
-      - if: needs.changes.outputs.rust == 'true' && steps.pueue.outputs.cache-hit != 'true'
+          key: pueue-v2-${{ env.IMAGE_OS }}-${{ runner.arch }}-4.0.4-rust-1.98.0
+      - if: steps.pueue.outputs.cache-hit != 'true'
         run: cargo install pueue --version 4.0.4 --locked --root "$RUNNER_TEMP/pueue"
-      - if: needs.changes.outputs.rust == 'true'
-        run: echo "$RUNNER_TEMP/pueue/bin" >> "$GITHUB_PATH"
       - uses: actions/cache@v4
         id: discovery
-        if: needs.changes.outputs.rust == 'true'
         with:
           path: ${{ runner.temp }}/discovery
-          key: discovery-v1-${{ runner.os }}-${{ runner.arch }}-fd10.5.0-rg15.2.0-bat0.26.1-tokei15.0.0-rust1.98.0
+          key: discovery-v2-${{ env.IMAGE_OS }}-${{ runner.arch }}-fd10.5.0-rg15.2.0-bat0.26.1-tokei15.0.0-rust1.98.0
       - name: Install pinned discovery CLIs
-        if: needs.changes.outputs.rust == 'true' && steps.discovery.outputs.cache-hit != 'true'
+        if: steps.discovery.outputs.cache-hit != 'true'
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/discovery-build
         run: |
@@ -93,63 +96,57 @@ jobs:
           cargo install bat --version 0.26.1 --locked --root "$RUNNER_TEMP/discovery"
           cargo install tokei --version 15.0.0 --locked --root "$RUNNER_TEMP/discovery"
       - name: Install pinned ast-grep CLI
-        if: needs.changes.outputs.rust == 'true'
         run: npm install --prefix "$RUNNER_TEMP/ast-grep" @ast-grep/cli@0.51.0
-      - if: needs.changes.outputs.rust == 'true'
-        run: |
-          echo "$RUNNER_TEMP/discovery/bin" >> "$GITHUB_PATH"
-          echo "$RUNNER_TEMP/ast-grep/node_modules/.bin" >> "$GITHUB_PATH"
-      - id: pnpm
-        if: needs.changes.outputs.site == 'true'
-        run: echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        if: needs.changes.outputs.site == 'true'
-        with:
-          path: ${{ steps.pnpm.outputs.store }}
-          key: pnpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sites/axvern-document-site/pnpm-lock.yaml') }}
-      - if: needs.changes.outputs.site == 'true'
-        run: pnpm install --frozen-lockfile
-        working-directory: sites/axvern-document-site
-      - name: Check affected groups (always execute tests, never cache results)
-        shell: bash
-        env:
-          AXVERN_REQUIRE_DISCOVERY_TOOLS: '1'
-          CHECK_RUST: ${{ needs.changes.outputs.rust }}
-          CHECK_SITE: ${{ needs.changes.outputs.site }}
-          CHECK_LINKS: ${{ needs.changes.outputs.links }}
-        run: |
-          mkdir -p target
-          set -o pipefail
-          tasks=()
-          if [[ "$CHECK_RUST" == true ]]; then
-            tasks+=(qualities:fmt qualities:check qualities:clippy qualities:test qualities:build qualities:pueue-spike)
-            if [[ -f qualities/scripts/release_smoke.py ]]; then tasks+=(qualities:release-smoke); fi
-          fi
-          if [[ "$CHECK_SITE" == true ]]; then tasks+=(site:check site:build); fi
-          if (( ${#tasks[@]} )); then moon run "${tasks[@]}" 2>&1 | tee target/quality.log; fi
-          if [[ "$CHECK_LINKS" == true && -f qualities/scripts/check_links.py ]]; then
-            python3 qualities/scripts/check_links.py 2>&1 | tee -a target/quality.log
-          fi
-      # The required discovery gate above runs without optional eza. Measure its
-      # display-only replacement separately; no structured discovery uses it.
+      # eza is cached here but stays off PATH until the dedicated spike step.
       - uses: actions/cache@v4
         id: eza
-        if: needs.changes.outputs.rust == 'true'
         with:
           path: ${{ runner.temp }}/eza
-          key: eza-v1-${{ runner.os }}-${{ runner.arch }}-0.23.5-rust1.98.0
+          key: eza-v2-${{ env.IMAGE_OS }}-${{ runner.arch }}-0.23.5-rust1.98.0
       - name: Install optional display spike CLI
-        if: needs.changes.outputs.rust == 'true' && steps.eza.outputs.cache-hit != 'true'
+        if: steps.eza.outputs.cache-hit != 'true'
         run: cargo install eza --version 0.23.5 --locked --root "$RUNNER_TEMP/eza"
+      - id: ready
+        run: |
+          mkdir -p target
+          {
+            echo "$RUNNER_TEMP/pueue/bin"
+            echo "$RUNNER_TEMP/discovery/bin"
+            echo "$RUNNER_TEMP/ast-grep/node_modules/.bin"
+          } >> "$GITHUB_PATH"
+
+      # Gate steps run independently once setup succeeds, so one failure does not
+      # hide the evidence of the others. Tests are always executed, never cached.
+      - name: Clippy
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: moon run qualities:clippy 2>&1 | tee -a target/quality.log
+      - name: Build
+        id: build
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: moon run qualities:build 2>&1 | tee -a target/quality.log
+      - name: Test
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          AXVERN_REQUIRE_DISCOVERY_TOOLS: '1'
+        run: moon run qualities:test 2>&1 | tee -a target/quality.log
+      - name: Pueue spike
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: moon run qualities:pueue-spike 2>&1 | tee -a target/quality.log
+      - name: Release smoke
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: |
+          if [[ -f qualities/scripts/release_smoke.py ]]; then
+            moon run qualities:release-smoke 2>&1 | tee -a target/quality.log
+          fi
+      # The required gate above runs without optional eza. Measure its
+      # display-only replacement separately; no structured discovery uses it.
       - name: Measure optional eza display through Policy and Pueue
-        if: needs.changes.outputs.rust == 'true'
-        shell: bash
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           AXVERN_REQUIRE_EZA_SPIKE: '1'
           AXVERN_TEST_BIN: ${{ github.workspace }}/target/debug/axvern
         run: |
           export PATH="$RUNNER_TEMP/eza/bin:$PATH"
-          set -o pipefail
           cargo test -p axvern-tests --locked --test tools_live -- --nocapture 2>&1 | tee -a target/quality.log
       - if: always()
         uses: actions/upload-artifact@v4
@@ -162,3 +159,52 @@ jobs:
             target/cli-contract-evidence.json
             target/discovery-tools.json
           if-no-files-found: ignore
+
+  site:
+    needs: changes
+    if: needs.changes.outputs.site == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
+      - id: pnpm
+        run: echo "store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm.outputs.store }}
+          key: pnpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sites/axvern-document-site/pnpm-lock.yaml') }}
+          restore-keys: pnpm-v1-${{ runner.os }}-${{ runner.arch }}-
+      - run: pnpm install --frozen-lockfile
+        working-directory: sites/axvern-document-site
+      - run: moon run site:check
+      - run: moon run site:build
+
+  links:
+    needs: changes
+    if: needs.changes.outputs.links == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          if [[ -f qualities/scripts/check_links.py ]]; then
+            python3 qualities/scripts/check_links.py
+          fi
+
+  # Single stable check for branch protection; skipped groups count as passing.
+  quality:
+    needs: [changes, fmt, rust, site, links]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            if [[ "$result" != success && "$result" != skipped ]]; then exit 1; fi
+          done

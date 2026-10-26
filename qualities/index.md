@@ -22,16 +22,32 @@ Probes hold non-TTY stdin open to detect prompt hangs, use private config/cwd, t
 ## CIの実行範囲とキャッシュ
 
 PRはそのPRのベースからの差分、mainへのpushは直前のコミットからの差分で判定する。
-Rust変更はワークスペース全体のfmt/check/clippy/build/testとPueue実機検証、
-サイト変更はBiome/build、Markdown変更はリンク確認（導入済みブランチ）を実行する。
+`changes` ジョブの判定結果（rust/site/links）で、以下のジョブ単位で実行を切り替える。
 CI・品質スクリプト・Moon設定など未知のパスと差分取得失敗は全チェックへ戻す。
 Issue追記案だけの変更は実行チェックを省略する。ファイル削除も判定に含める。
 PRの同期ごとにPR全体を再判定するため、過去の失敗した変更が対象から外れることはない。
 
-Cargo registry/gitとdebug/release成果物はOS・アーキテクチャ・ツールチェーン・
-manifest/lockfileで分離し、Pueue 4.0.4のインストールとpnpmストアもキャッシュする。
+| ジョブ | 条件 | ランナー | 内容 |
+|---|---|---|---|
+| `fmt` | rust | Ubuntu | `qualities:fmt` |
+| `rust` | rust | Ubuntu/macOS | Clippy、build、test、Pueue spike、release smoke、eza spike、証跡 artifact |
+| `site` | site | Ubuntu | Biome check、build |
+| `links` | links | Ubuntu | 内部リンク検査（導入済みブランチ） |
+| `quality` | 常時 | Ubuntu | 上記の集約。失敗・キャンセルがあれば失敗、スキップは成功扱い |
+
+Clippy は `--all-targets` で check を兼ねるため、CI は `qualities:check` を個別に実行しない。
+Linux 以外専用のコードがあるため Clippy は両 OS で実行する。
+`rust` ジョブの各ゲートはセットアップ成功後に互いに独立して実行し、
+一つの失敗で他の証跡が欠けないようにする（test と eza spike は build 成功が前提）。
+
+Cargo registry/git と依存クレートの成果物は `Swatinem/rust-cache` が
+ランナーイメージ・ツールチェーン・lockfile 単位でキャッシュする。
+ワークスペースのクレートは保存前に除くため、コミットごとにエントリは増えない。
+Pueue・discovery CLI・eza の `cargo install` 結果はランナーイメージ（`ImageOS`）と版で、
+pnpm ストアは lockfile で分離してキャッシュする。
 テスト結果・実機検証の証跡はキャッシュしない。Rust変更時は関連チェックを必ず再実行する。
 feature branchのpushとPRの二重実行を避け、古い同一PRの実行はキャンセルする。
+mainの実行はキャッシュを更新するためキャンセルしない。
 
 ## v0.2 discovery acceptance
 

@@ -1,0 +1,13 @@
+name: Set up Moon
+description: Install the pinned Node, Moon and pnpm, and create the local main branch Moon resolves.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24.22.0
+    - shell: bash
+      run: npm install --global @moonrepo/cli@2.5.6 pnpm@12.11.2
+    # Moon resolves the configured default branch even for explicit task runs.
+    - shell: bash
+      run: git show-ref --verify --quiet refs/heads/main || git branch main origin/main
