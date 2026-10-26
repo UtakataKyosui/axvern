@@ -74,7 +74,10 @@ jobs:
           cache: pip
           cache-dependency-path: qualities/mojo-requirements.txt
       - name: Install pinned Mojo compiler for CLI contract tests
+        # rust-cache restores target/ with empty directories left from a previous
+        # venv; an empty pip/ package makes ensurepip skip installing pip.
         run: |
+          rm -rf target/mojo-env
           python -m venv target/mojo-env
           target/mojo-env/bin/python -m pip install --require-hashes -r qualities/mojo-requirements.txt
       # Tool caches are saved right after install, so a failing gate later in
