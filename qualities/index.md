@@ -45,9 +45,14 @@ Cargo registry/git と依存クレートの成果物は `Swatinem/rust-cache` �
 ワークスペースのクレートは保存前に除くため、コミットごとにエントリは増えない。
 Pueue・discovery CLI・eza の `cargo install` 結果はランナーイメージ（`ImageOS`）と版で、
 pnpm ストアは lockfile で分離してキャッシュする。
+キャッシュがないツールは個別の target ディレクトリで並列にビルドし、
+後続ゲートの成否に関わらずインストール直後に保存する。
+release smoke の `cargo install` は直前のリリースビルドを `target/` から再利用する。
 テスト結果・実機検証の証跡はキャッシュしない。Rust変更時は関連チェックを必ず再実行する。
 feature branchのpushとPRの二重実行を避け、古い同一PRの実行はキャンセルする。
 mainの実行はキャッシュを更新するためキャンセルしない。
+キャッシュは7日間アクセスがないと消えるため、mainで週2回（日・水 18:00 UTC）定期実行する。
+定期実行には差分の基準がないため全チェックを実行する。
 
 ## v0.2 discovery acceptance
 

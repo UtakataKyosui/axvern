@@ -48,6 +48,7 @@ class PlanTests(unittest.TestCase):
                 ({'before': base}, {'rust'}),
                 ({'before': '0' * 40}, {'rust', 'site', 'links'}),
                 ({'before': 'missing-revision'}, {'rust', 'site', 'links'}),
+                ({}, {'rust', 'site', 'links'}),  # schedule has no diff base
             ]:
                 (root / 'event.json').write_text(json.dumps(event))
                 output = root / 'output'

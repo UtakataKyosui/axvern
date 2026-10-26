@@ -16,7 +16,9 @@ def run(args):
 
 subprocess.run(["cargo", "build", "--release", "--locked", "--bin", "axvern"], cwd=ROOT, check=True)
 with tempfile.TemporaryDirectory(prefix="axvern-install-") as directory:
-    subprocess.run(["cargo", "install", "--locked", "--path", "tools/cli", "--root", directory], cwd=ROOT, check=True)
+    # Reuse the release build above instead of compiling again in a temporary target.
+    subprocess.run(["cargo", "install", "--locked", "--path", "tools/cli", "--root", directory,
+                    "--target-dir", str(ROOT / "target")], cwd=ROOT, check=True)
     binary = Path(directory) / "bin/axvern"
     version = run([str(binary), "--version"])
     assert version == "axvern 0.1.0", version

@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Cache entries expire after 7 days without access; keep main's warm.
+  schedule:
+    - cron: '0 18 * * 0,3'
 permissions:
   contents: read
 concurrency:
@@ -74,38 +77,67 @@ jobs:
         run: |
           python -m venv target/mojo-env
           target/mojo-env/bin/python -m pip install --require-hashes -r qualities/mojo-requirements.txt
-      - uses: actions/cache@v4
+      # Tool caches are saved right after install, so a failing gate later in
+      # the job does not discard a cold build. eza stays off PATH until its spike.
+      - uses: actions/cache/restore@v4
         id: pueue
         with:
           path: ${{ runner.temp }}/pueue
           key: pueue-v2-${{ env.IMAGE_OS }}-${{ runner.arch }}-4.0.4-rust-1.98.0
-      - if: steps.pueue.outputs.cache-hit != 'true'
-        run: cargo install pueue --version 4.0.4 --locked --root "$RUNNER_TEMP/pueue"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: discovery
         with:
           path: ${{ runner.temp }}/discovery
           key: discovery-v2-${{ env.IMAGE_OS }}-${{ runner.arch }}-fd10.5.0-rg15.2.0-bat0.26.1-tokei15.0.0-rust1.98.0
-      - name: Install pinned discovery CLIs
-        if: steps.discovery.outputs.cache-hit != 'true'
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/discovery-build
-        run: |
-          cargo install fd-find --version 10.5.0 --locked --root "$RUNNER_TEMP/discovery"
-          cargo install ripgrep --version 15.2.0 --locked --root "$RUNNER_TEMP/discovery"
-          cargo install bat --version 0.26.1 --locked --root "$RUNNER_TEMP/discovery"
-          cargo install tokei --version 15.0.0 --locked --root "$RUNNER_TEMP/discovery"
-      - name: Install pinned ast-grep CLI
-        run: npm install --prefix "$RUNNER_TEMP/ast-grep" @ast-grep/cli@0.51.0
-      # eza is cached here but stays off PATH until the dedicated spike step.
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: eza
         with:
           path: ${{ runner.temp }}/eza
           key: eza-v2-${{ env.IMAGE_OS }}-${{ runner.arch }}-0.23.5-rust1.98.0
-      - name: Install optional display spike CLI
-        if: steps.eza.outputs.cache-hit != 'true'
-        run: cargo install eza --version 0.23.5 --locked --root "$RUNNER_TEMP/eza"
+      - name: Install missing pinned CLIs in parallel
+        if: steps.pueue.outputs.cache-hit != 'true' || steps.discovery.outputs.cache-hit != 'true' || steps.eza.outputs.cache-hit != 'true'
+        env:
+          PUEUE_HIT: ${{ steps.pueue.outputs.cache-hit }}
+          DISCOVERY_HIT: ${{ steps.discovery.outputs.cache-hit }}
+          EZA_HIT: ${{ steps.eza.outputs.cache-hit }}
+        run: |
+          pids=()
+          install() {  # root crate version
+            CARGO_TARGET_DIR="$RUNNER_TEMP/build-$2" \
+              cargo install "$2" --version "$3" --locked --root "$RUNNER_TEMP/$1" >"$RUNNER_TEMP/install-$2.log" 2>&1 &
+            pids+=("$!:$2")
+          }
+          [[ "$PUEUE_HIT" == true ]] || install pueue pueue 4.0.4
+          if [[ "$DISCOVERY_HIT" != true ]]; then
+            install discovery fd-find 10.5.0
+            install discovery ripgrep 15.2.0
+            install discovery bat 0.26.1
+            install discovery tokei 15.0.0
+          fi
+          [[ "$EZA_HIT" == true ]] || install eza eza 0.23.5
+          failed=0
+          for entry in "${pids[@]}"; do
+            if ! wait "${entry%%:*}"; then failed=1; cat "$RUNNER_TEMP/install-${entry#*:}.log"; fi
+            echo "cargo install ${entry#*:}: $(tail -n 1 "$RUNNER_TEMP/install-${entry#*:}.log")"
+          done
+          exit "$failed"
+      - if: steps.pueue.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/pueue
+          key: ${{ steps.pueue.outputs.cache-primary-key }}
+      - if: steps.discovery.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/discovery
+          key: ${{ steps.discovery.outputs.cache-primary-key }}
+      - if: steps.eza.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/eza
+          key: ${{ steps.eza.outputs.cache-primary-key }}
+      - name: Install pinned ast-grep CLI
+        run: npm install --prefix "$RUNNER_TEMP/ast-grep" @ast-grep/cli@0.51.0
       - id: ready
         run: |
           mkdir -p target
