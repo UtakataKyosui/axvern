@@ -78,7 +78,7 @@ Historical macOS measurements are in `qualities/evidence/18-macos.md`, `19-macos
 
 ## v0.3 Retrieve acceptance (#3 / #24–#27, #51–#53)
 
-`query` and `recall` are implemented over the Pueue log that still exists; `logs` is deliberately not a command. The behaviour, limits and retention are in the [retrieve guide](/retrieve). Measurements and the spike are in `qualities/evidence/24-27-retrieve.md`; the macOS run and the Mojo contract extension are still owed, so the cross-platform gate is not claimed. Remote Issues are not closed by these checks.
+`query` and `recall` are implemented over the Pueue log that still exists; `logs` is deliberately not a command. The behaviour, limits and retention are in the [retrieve guide](/retrieve). Measurements and the spike are in `qualities/evidence/24-27-retrieve.md`; the macOS run (peak RSS about 8.8 MiB on a 95 MB log) is recorded there; the Mojo contract extension is still owed, so the Mojo gate is not claimed. Remote Issues are not closed by these checks.
 
 | Requirement / boundary | Executable coverage in `logics/tests/tests` |
 | --- | --- |
