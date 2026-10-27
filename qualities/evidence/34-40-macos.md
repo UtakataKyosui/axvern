@@ -21,6 +21,7 @@ Date: 2026-10-15. Platform: macOS arm64. Rust 1.98.0, Pueue 4.0.4, Node 24.22.0.
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `git diff --check` pass.
 - Mojo 1.1.0 contract evaluator: compile, 55 validator fixtures, process-boundary self-tests, and 33 CLI probes across seven rule groups pass. Existing locked development dependencies were installed under ignored target directories. Sandbox execution traps in the compiler; normal-permission execution passes.
 - Site: Biome check and Rspress production build pass; 19 local documentation links pass. Used existing pnpm 12.6.0 with the frozen lockfile; the repository's preferred pnpm 12.11.2 was unavailable. No lockfile/package change.
+- Result maintenance cost (macOS arm64, release build, 1 KiB result per entry, all within retention): `results::maintain`, which runs under the store lock, averaged 5 ms at 100 entries, 30 ms at 1,000, 169 ms at 5,000 and 963 ms at 20,000. Cost grows linearly (about 0.05 ms per entry). No index or scan throttle is added; revisit when a store routinely holds more than about 5,000 retained results.
 - Release smoke: release build, private temporary Cargo install, version/help and noninteractive refusal pass. No publication/deployment.
 
 ## Operational boundaries
