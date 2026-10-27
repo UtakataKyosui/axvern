@@ -197,6 +197,32 @@ class HookTests(unittest.TestCase):
         self.assertNotEqual(self.command('install-hooks').returncode, 0)
         self.assertEqual(legacy.read_text(), 'existing hook')
 
+    def test_explicit_selection_overrides_branch_issue_and_reloads_blockers(self):
+        self.git('symbolic-ref', 'HEAD', 'refs/heads/issue-88-work')
+        selected_issue = deepcopy(self.impl)
+        selected_issue.update(id='issue-89', number=89)
+        fixtures = {'88': self.impl, '89': selected_issue, '35': self.req}
+        self.fixture.write_text(json.dumps(fixtures))
+        selected = self.command('select', '89')
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        checked = self.command('check')
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertEqual(json.loads(checked.stdout)['issue'], 89)
+
+        selected_issue['blockedBy']['nodes'].append(
+            {'id': 'issue-108', 'number': 108, 'state': 'OPEN'})
+        self.fixture.write_text(json.dumps(fixtures))
+        checked = self.command('check')
+        self.assertNotEqual(checked.returncode, 0)
+        self.assertEqual(json.loads(checked.stdout)['issue'], 89)
+        self.assertIn('#108', checked.stdout)
+        (self.root / 'change.txt').write_text('change')
+        self.git('add', 'change.txt')
+        hook = subprocess.run(['./.githooks/pre-commit'], cwd=self.root,
+                              env=self.env, text=True, capture_output=True)
+        self.assertNotEqual(hook.returncode, 0)
+        self.assertEqual(json.loads(hook.stdout)['issue'], 89)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -167,7 +167,7 @@ def resolve(args, root, branch):
     if path.exists():
         try:
             context = json.loads(path.read_text())
-            if context['branch'] == branch and (number is None or context['issue'] == number):
+            if context['branch'] == branch:
                 return context['issue'], args.mode or context['mode'], args.early_start_reason or context.get('early_start_reason')
         except (KeyError, TypeError, json.JSONDecodeError) as exc:
             raise GateError('作業選択情報が不正です。selectで選び直してください。') from exc
