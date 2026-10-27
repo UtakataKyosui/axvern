@@ -1,5 +1,40 @@
 # Quality gates
 
+Claude Code / Codexの起動・設定・検証の選択は
+[開発ハーネス](agent-harness.md)を参照。
+
+## GitHub Projectによる開発管理
+
+[Project axvern](https://github.com/users/UtakataKyosui/projects/30)を作業管理の正本とする。
+[リポジトリ運用](../AGENTS.md)と
+[project-workflow Skill](../.agents/skills/project-workflow/SKILL.md)に従う。
+
+```sh
+python3 qualities/scripts/project_gate.py install-hooks
+python3 qualities/scripts/project_gate.py inspect --issue 108
+python3 qualities/scripts/project_gate.py select 108
+python3 qualities/scripts/project_gate.py check
+```
+
+Git・Python 3.9以降・認証済みGitHub CLIが必要。製品runtimeの依存ではない。
+`select`はProjectの最新状態を検査してworktree別のGitメタデータへIssueを記録する。
+`check`は選択済みIssue、`AXVERN_ISSUE`、または`issue-N-description`等のブランチ名を使う。
+要件整理は`--mode plan`。開始前の作業はユーザーが明示した前倒し理由を
+`--early-start-reason`へ記録する。この指定は未完了Blockerや要件ペアの欠落を許可しない。
+締切超過は警告として表示する。
+
+pre-commitはstaged変更があるとき、Project所属・作業種別・Phase・期間・要件ペア・
+blocked-byを再検査し、不足や通信失敗でcommitを停止する。
+Git Hookはcommitの検査であり、Agentの全編集を遮断するものではない。
+既存のhooksPathやpre-commitがあれば導入を停止し、上書きしない。
+clone後は各開発環境で導入する。`moon run qualities:project-hooks`と
+`moon run qualities:project-check`も利用できる。
+
+`python3 qualities/scripts/test_project_gate.py` はネットワークを使わず、
+GitHub応答のfixtureと一時リポジトリで拒否条件・実Hook・選択情報の分離を確認する。
+CIの`changes`ジョブでも実行する。CIでは個人Projectの資格情報を追加せず、
+ライブProject照会は開発環境のチェックで行う。
+
 `devbox run test` invokes Moon's `qualities:verify` and `qualities:pueue-spike`.
 Rust tests receive the built public CLI through `AXVERN_TEST_BIN`; use the Moon runner rather than bare Cargo tests for CLI integration coverage.
 `qualities:test` runs the workspace tests with cargo-nextest 0.9.146 (included in devbox) when available, plus `cargo test --doc` because nextest skips doctests; without nextest it falls back to `cargo test`. `AXVERN_REQUIRE_NEXTEST=1` turns a missing nextest into a failure. The `ci` profile in `.config/nextest.toml` disables fail-fast and adds no retries.

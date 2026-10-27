@@ -65,6 +65,8 @@ axvern run -- true </dev/null
 
 ## Development
 
+Claude Code / Codexでの開発は [開発ハーネス](qualities/agent-harness.md) を参照してください。
+
 依存方向: `tools/cli → logics/core → logics/models`。共有契約は models、ユースケース・具体 I/O は core、統合テストは logics/tests、品質設定は qualities、公開ドキュメントは sites に配置しています。
 
 Node 24.22.0、pnpm 12.11.2、Moon 2.5.6、Python 3、Rust 1.98.0 を用意します。Devbox は Moon/Pueue を固定します。

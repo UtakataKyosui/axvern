@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+root=$(git rev-parse --show-toplevel)
+if git diff --cached --quiet; then
+    exit 0
+fi
+exec python3 "$root/qualities/scripts/project_gate.py" check

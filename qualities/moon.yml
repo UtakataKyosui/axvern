@@ -4,6 +4,15 @@ taskOptions:
   cache: false
   runFromWorkspaceRoot: true
 tasks:
+  harness-test:
+    command: python3 qualities/scripts/test_project_gate.py
+    deps: [qualities:agent-hook-test]
+  agent-hook-test:
+    command: python3 qualities/scripts/test_agent_hook.py
+  project-check:
+    command: python3 qualities/scripts/project_gate.py check
+  project-hooks:
+    command: python3 qualities/scripts/project_gate.py install-hooks
   fmt:
     command: cargo fmt --all --check
   check:
@@ -25,4 +34,4 @@ tasks:
     command: python3 qualities/scripts/release_smoke.py
   verify:
     command: noop
-    deps: [qualities:fmt, qualities:check, qualities:clippy, qualities:test, qualities:build, qualities:links, qualities:release-smoke, site:check, site:build]
+    deps: [qualities:harness-test, qualities:fmt, qualities:check, qualities:clippy, qualities:test, qualities:build, qualities:links, qualities:release-smoke, site:check, site:build]
