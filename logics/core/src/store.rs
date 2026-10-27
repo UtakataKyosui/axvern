@@ -556,6 +556,8 @@ pub struct RegistrationFailure {
     pub receipt: Option<Box<ExecutionRecord>>,
     pub execution_id: Option<ExecutionId>,
 }
+/// Low-level registration of an already-built Pueue plan. It neither captures output nor
+/// reserves capacity; embedders run targets through `ExecutionService::run`.
 pub fn register_and_save(
     adapter: &mut PueueAdapter,
     store: &ExecutionStore,

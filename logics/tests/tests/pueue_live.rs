@@ -605,7 +605,7 @@ fn concurrent_service_runs_without_request_id_register_one_task_within_capacity(
         .map(|_| {
             let (config, runner, plan) = (config.clone(), runner.clone(), plan.clone());
             thread::spawn(move || {
-                ExecutionService::new(config).unwrap().run_captured(
+                ExecutionService::new(config).unwrap().run(
                     &runner,
                     &plan,
                     false,
