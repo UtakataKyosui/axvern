@@ -4,7 +4,7 @@ use crate::{
     config::{Config, UserPaths},
     planner::{self, Planned},
     policy,
-    store::{ExecutionStore, RegistrationFailure, register_and_save},
+    store::{ExecutionStore, RegistrationFailure},
 };
 use axvern_models::*;
 use std::{
@@ -332,20 +332,16 @@ impl ExecutionService {
     pub fn decision(&self, plan: &ExecutionPlan) -> Result<PolicyDecision, Error> {
         policy::evaluate(&self.config, plan)
     }
+    /// Same capture, capacity reservation and replay path as the CLI. `runner` is the
+    /// internal worker executable that Pueue launches in place of the target.
     pub fn run(
         &mut self,
+        runner: &Path,
         plan: &ExecutionPlan,
         interactive: bool,
         approval: Approval,
     ) -> Result<ExecutionRecord, RegistrationFailure> {
-        authorize(&self.config, plan, interactive, approval).map_err(|error| {
-            RegistrationFailure {
-                error,
-                receipt: None,
-                execution_id: None,
-            }
-        })?;
-        register_and_save(&mut self.adapter, &self.store, plan)
+        self.run_captured(runner, plan, interactive, approval)
     }
     pub fn status(&self, id: &ExecutionId) -> Result<ExecutionView, Error> {
         let record = self.store.find_record(id)?;
