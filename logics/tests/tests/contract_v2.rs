@@ -218,6 +218,41 @@ fn worker_captures_before_completion_and_pages_unicode_with_exact_wire_budget() 
     assert!(path.exists());
 }
 #[test]
+fn save_failure_after_target_exit_keeps_target_status_and_leaves_no_artifact() {
+    let (temp, store) = store();
+    let root = temp.path().canonicalize().unwrap().join("executions");
+    let id = ExecutionStore::allocate_id().unwrap();
+    let spool = root.join("results").join(format!("{id}.spool"));
+    // The target removes its own spool, so publishing the artifact fails after it has exited.
+    let script = format!(
+        "import os, sys; sys.stdout.write('data'); os.remove({:?}); sys.exit(23)",
+        spool.to_str().unwrap()
+    );
+    assert_eq!(worker(&root, &id, &script, 250000).code(), Some(23));
+    let settings = Results {
+        retention_seconds: 3600,
+        capacity_bytes: 1048576,
+        max_artifact_bytes: 250000,
+    };
+    let manifest = results::inspect(&store, &settings, &id).unwrap().unwrap();
+    assert_eq!(manifest.availability, "unavailable");
+    assert_eq!(manifest.exit_code, Some(23));
+    assert_eq!(manifest.state, Some(ChildState::Failed));
+    assert!(manifest.error.is_some());
+    let (_, output) = results::page(&store, &settings, &id, None, 2, 1024).unwrap();
+    assert_eq!(output["result_availability"], "unavailable");
+    assert!(output["result"].is_null());
+    assert!(output["result_error"].is_object());
+    for extension in ["spool", "output"] {
+        assert!(
+            !root
+                .join("results")
+                .join(format!("{id}.{extension}"))
+                .exists()
+        );
+    }
+}
+#[test]
 fn preview_truncation_capacity_eviction_and_active_spool_reservations() {
     let (temp, store) = store();
     let root = temp.path().canonicalize().unwrap().join("executions");
@@ -342,6 +377,46 @@ fn parent_state_aggregation_does_not_invent_child_exit_codes() {
     assert_eq!(aggregate(&[]), None);
 }
 
+#[test]
+fn parent_save_recovers_its_own_abandoned_scratch_and_refuses_unsafe_scratch() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, store) = store();
+    let root = temp.path().canonicalize().unwrap().join("executions");
+    let child = store
+        .register_request(&"b".repeat(128), &plan(), || Ok(()), |_| Ok(identity()))
+        .unwrap()
+        .execution_id;
+    let parent = ParentRecord {
+        execution_id: ExecutionStore::allocate_id().unwrap(),
+        registered_at: 1,
+        cwd: plan().cwd.to_str().unwrap().into(),
+        children: vec![child],
+        analysis: None,
+    };
+    let scratch = root.join(format!("{}.parent-scratch", parent.execution_id));
+    fs::write(&scratch, b"partial").unwrap();
+    fs::set_permissions(&scratch, fs::Permissions::from_mode(0o600)).unwrap();
+    axvern_core::parents::save(&store, &parent).unwrap();
+    assert!(!scratch.exists());
+    assert_eq!(
+        axvern_core::parents::find(&store, &parent.execution_id)
+            .unwrap()
+            .unwrap(),
+        parent
+    );
+    let other = ParentRecord {
+        execution_id: ExecutionStore::allocate_id().unwrap(),
+        ..parent.clone()
+    };
+    let unsafe_scratch = root.join(format!("{}.parent-scratch", other.execution_id));
+    fs::write(&unsafe_scratch, b"partial").unwrap();
+    fs::set_permissions(&unsafe_scratch, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        axvern_core::parents::save(&store, &other).unwrap_err().code,
+        ErrorCode::PermissionDenied
+    );
+    assert!(unsafe_scratch.exists());
+}
 #[test]
 fn concurrent_registrations_without_request_id_share_one_capacity_reservation() {
     let (_temp, store) = store();

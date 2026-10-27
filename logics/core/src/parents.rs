@@ -103,6 +103,19 @@ pub fn save(store: &ExecutionStore, record: &ParentRecord) -> Result<(), Error> 
     let scratch = store
         .root
         .join(format!("{}.parent-scratch", record.execution_id));
+    // Recover our own abandoned scratch from a writer that died before publication.
+    if let Ok(meta) = scratch.symlink_metadata() {
+        if !meta.is_file()
+            || meta.file_type().is_symlink()
+            || meta.permissions().mode() & 0o777 != 0o600
+        {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "parent metadata must be a private regular file",
+            ));
+        }
+        fs::remove_file(&scratch).map_err(|_| failure())?;
+    }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
