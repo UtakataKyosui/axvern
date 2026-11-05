@@ -1337,8 +1337,9 @@ fn result_response(
                         }
                     }
                     Err(e) => {
+                        let code = error_exit(&e);
                         response.error = Some(e);
-                        return (response, 11);
+                        return (response, code);
                     }
                 }
             }
