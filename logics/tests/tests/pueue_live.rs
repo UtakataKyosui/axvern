@@ -621,3 +621,68 @@ fn concurrent_service_runs_without_request_id_register_one_task_within_capacity(
     }
     assert_eq!(q.adapter.list().unwrap().len(), 1);
 }
+
+#[test]
+fn interrupting_wait_keeps_the_same_target_running_without_registration() {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Stdio;
+    let q = Queue::new();
+    let config = q._temp.path().join("axvern.toml");
+    fs::write(&config, format!(
+        "schema_version=1\n[execution]\npueue_config={}\nstore={}\n[[policy.rules]]\nid='python'\neffect='allow'\ncommand='python3'\n",
+        serde_json::to_string(&q.adapter.config).unwrap(),
+        serde_json::to_string(&q._temp.path().join("store")).unwrap()
+    )).unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    let run = cli_json(
+        &q,
+        &config,
+        &[
+            "run",
+            "--cwd",
+            q._temp.path().to_str().unwrap(),
+            "--wait",
+            "0s",
+            "--",
+            "python3",
+            "-c",
+            "import os,time; deadline=time.monotonic()+15\nwhile not os.path.exists('RELEASE') and time.monotonic()<deadline: time.sleep(0.02)\nprint('completed')",
+        ],
+        0,
+    );
+    let id = run["execution_id"].as_str().unwrap();
+    let mut waiter = Command::new(std::env::var_os("AXVERN_TEST_BIN").unwrap())
+        .current_dir(q._temp.path())
+        .arg("--config")
+        .arg(&config)
+        .args(["wait", id, "--timeout", "10s"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_millis(150));
+    assert!(waiter.try_wait().unwrap().is_none());
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &waiter.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(waiter.wait().unwrap().signal(), Some(2));
+    let tasks = q.adapter.list().unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert!(matches!(
+        tasks[0].state,
+        ChildState::Queued | ChildState::Running
+    ));
+    let still_running = cli_json(&q, &config, &["status", id], 0);
+    assert!(still_running["state"] == "running" || still_running["state"] == "queued");
+    fs::write(q._temp.path().join("RELEASE"), b"finish").unwrap();
+    assert_eq!(
+        cli_json(&q, &config, &["wait", id, "--timeout", "10s"], 0)["state"],
+        "done"
+    );
+    assert_eq!(q.adapter.list().unwrap().len(), 1);
+}
