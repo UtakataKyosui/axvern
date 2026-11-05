@@ -7,6 +7,7 @@ axvern run [--cwd PATH] [--wait 1s] [--request-id KEY] -- PROGRAM [ARGS...]
 axvern status EXECUTION_ID
 axvern wait EXECUTION_ID [--timeout 30s]
 axvern result EXECUTION_ID [--cursor TOKEN] [--limit 100] [--max-bytes 65536]
+axvern result recover EXECUTION_ID
 axvern history [--limit 20]
 axvern doctor [--scope core|discovery|logs|performance|all]
 axvern policy check [--cwd PATH] -- PROGRAM [ARGS...]

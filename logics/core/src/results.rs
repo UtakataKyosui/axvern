@@ -49,6 +49,17 @@ pub struct Manifest {
     /// any child succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregate_state: Option<TaskState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion: Option<Completion>,
+    #[serde(skip)]
+    _lease: Option<Arc<File>>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Completion {
+    finished_at: u64,
+    state: ChildState,
+    exit_code: Option<i32>,
 }
 fn run_kind() -> String {
     "run".into()
@@ -120,6 +131,9 @@ fn read(dir: &Path, id: &ExecutionId) -> Result<Option<Manifest>, Error> {
     ) || m.finished_at.is_some() != m.state.is_some()
         || (m.availability == "pending" && m.finished_at.is_some())
         || (m.availability == "available" && m.finished_at.is_none())
+        || m.completion
+            .as_ref()
+            .is_some_and(|c| !matches!(c.state, ChildState::Done | ChildState::Failed))
     {
         return Err(failure());
     }
@@ -191,7 +205,9 @@ fn maintain(store: &ExecutionStore, settings: &Results, needed: u64) -> Result<u
     }
     let reserved: u64 = entries
         .iter()
-        .filter(|m| m.finished_at.is_none())
+        .filter(|m| {
+            m.finished_at.is_none() || (m.availability == "unavailable" && m.completion.is_some())
+        })
         .map(|m| m.reserved_bytes)
         .sum();
     let mut used = usage(&store.root)?.saturating_add(reserved);
@@ -248,6 +264,14 @@ pub fn reserve(
         ));
     }
     let budget = settings.max_artifact_bytes.min(free - 32768);
+    let lease_path = dir.join(format!("{id}.lease"));
+    let lease = io(OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(lease_path))?;
+    io(lease.lock())?;
     let m = Manifest {
         schema_version: 1,
         execution_id: id.clone(),
@@ -261,6 +285,8 @@ pub fn reserve(
         truncated: false,
         error: None,
         aggregate_state: None,
+        completion: None,
+        _lease: Some(Arc::new(lease)),
     };
     publish(&dir, &m)?;
     let file = io(OpenOptions::new()
@@ -331,6 +357,8 @@ pub(crate) fn reserve_or_record(
                     truncated: false,
                     error: Some(error.clone()),
                     aggregate_state: None,
+                    completion: None,
+                    _lease: None,
                 };
                 let _ = publish(&dir, &unavailable);
             }
@@ -351,11 +379,89 @@ pub(crate) fn publish_available(
     m.availability = "available".into();
     let _lock = store.lock()?;
     let dir = directory(store)?;
+    // Persist proof only after the target and capture readers finished and the spool
+    // was synced. Keep the pending reservation until immutable publication completes.
+    let mut pending = read(&dir, id)?.ok_or_else(failure)?;
+    pending.completion = Some(Completion {
+        finished_at: m.finished_at.ok_or_else(failure)?,
+        state: m.state.ok_or_else(failure)?,
+        exit_code: m.exit_code,
+    });
+    publish(&dir, &pending)?;
     io(fs::rename(
         dir.join(format!("{id}.spool")),
         dir.join(format!("{id}.output")),
     ))?;
     publish(&dir, m)
+}
+/// Explicit recovery, never a read side effect. Missing proof leaves reservations intact.
+/// Pueue identity, completion receipt and worker lease are checked under the store lock.
+pub fn recover(
+    store: &ExecutionStore,
+    adapter: &crate::adapters::pueue::PueueAdapter,
+    id: &ExecutionId,
+) -> Result<(), Error> {
+    let _lock = store.lock()?;
+    let record = store.read(id)?;
+    let dir = directory(store)?;
+    let mut m = read(&dir, id)?.ok_or_else(failure)?;
+    if m.availability != "pending"
+        && !(m.availability == "unavailable" && m.completion.is_some() && m.reserved_bytes > 0)
+    {
+        return Ok(());
+    }
+    let review = || {
+        Error::new(
+            ErrorCode::RequestConflict,
+            "recovery requires confirmed target completion and an inactive worker; reservation retained",
+        )
+    };
+    let receipt = m.completion.clone().ok_or_else(review)?;
+    let path = dir.join(format!("{id}.lease"));
+    private(&path, false)?;
+    let lease = io(OpenOptions::new().read(true).write(true).open(path))?;
+    match lease.try_lock() {
+        Ok(()) => (),
+        Err(std::fs::TryLockError::WouldBlock) => return Err(review()),
+        Err(_) => return Err(failure()),
+    }
+    let task = adapter.inspect_owned(&record.backend)?;
+    if !matches!(task.state, ChildState::Done | ChildState::Failed) || task.finished_at.is_none() {
+        return Err(review());
+    }
+    // A completed capture may have died between rename and manifest publication.
+    // Do not infer a complete artifact from leftover bytes; retain the target status
+    // and explicitly record unavailable before releasing any reserved capacity.
+    for extension in ["spool", "output"] {
+        let path = dir.join(format!("{id}.{extension}"));
+        match path.symlink_metadata() {
+            Ok(_) => private(&path, false)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => return Err(failure()),
+        }
+    }
+    m.finished_at = Some(receipt.finished_at);
+    m.state = Some(receipt.state);
+    m.exit_code = receipt.exit_code;
+    m.availability = "unavailable".into();
+    m.error = Some(Error::new(
+        ErrorCode::StoreFailure,
+        "worker interrupted during result publication; target was not retried",
+    ));
+    // Publish a conservative tombstone while still accounting for leftover spool.
+    publish(&dir, &m)?;
+    for extension in ["spool", "output"] {
+        let path = dir.join(format!("{id}.{extension}"));
+        match fs::remove_file(path) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => return Err(failure()),
+        }
+    }
+    io(io(File::open(&dir))?.sync_all())?;
+    m.reserved_bytes = 0;
+    m.bytes = 0;
+    publish(&dir, &m)
 }
 /// Every failure after the target completed must preserve the target's actual status and
 /// expose a separate store error.
@@ -1000,6 +1106,8 @@ impl<'a> Derivation<'a> {
             truncated,
             error: None,
             aggregate_state: Some(aggregate),
+            completion: None,
+            _lease: None,
         };
         publish(&self.dir, &m)?;
         Ok(m)
@@ -1027,6 +1135,156 @@ pub(crate) fn encode_document(doc: &DiscoveryDocument) -> Result<(Vec<u8>, Vec<V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_publication_worker() {
+        let Some(root) = std::env::var_os("AXVERN_RECOVERY_TEST_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let store = ExecutionStore::open(root.join("store")).unwrap();
+        let id = fs::read_to_string(root.join("id"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let (mut m, mut file) = reserve(&store, &Results::default(), &id).unwrap();
+        file.write_all(b"finished capture").unwrap();
+        file.sync_all().unwrap();
+        m.completion = Some(Completion {
+            finished_at: 123,
+            state: ChildState::Failed,
+            exit_code: Some(23),
+        });
+        publish(&directory(&store).unwrap(), &m).unwrap();
+        fs::write(root.join("ready"), b"ready").unwrap();
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[test]
+    fn killed_worker_releases_lease_but_preserves_completion_proof() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let store = ExecutionStore::open(root.join("store")).unwrap();
+        let id = ExecutionStore::allocate_id().unwrap();
+        fs::write(root.join("id"), id.to_string()).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "results::tests::interrupted_publication_worker"])
+            .env("AXVERN_RECOVERY_TEST_ROOT", &root)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !root.join("ready").exists() {
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("worker did not become ready");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let dir = directory(&store).unwrap();
+        let lease = File::open(dir.join(format!("{id}.lease"))).unwrap();
+        assert!(matches!(
+            lease.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        lease.try_lock().unwrap();
+        let m = read(&dir, &id).unwrap().unwrap();
+        assert_eq!(m.availability, "pending");
+        assert_eq!(m.completion.unwrap().exit_code, Some(23));
+        assert!(m.reserved_bytes > 0);
+    }
+
+    #[test]
+    fn recovery_requires_completion_inactive_lease_and_matching_terminal_backend() {
+        use crate::adapters::pueue::PueueAdapter;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let store = ExecutionStore::open(root.join("store")).unwrap();
+        let id = ExecutionStore::allocate_id().unwrap();
+        let record = ExecutionRecord {
+            execution_id: id.clone(),
+            backend: BackendIdentity {
+                queue: "test".into(),
+                task_id: 1,
+                created_at: "original".into(),
+            },
+            registered_at: now(),
+            cwd: root.to_str().unwrap().into(),
+            rewrite: None,
+        };
+        store.save_record(&record).unwrap();
+        let script = root.join("pueue");
+        let adapter = PueueAdapter {
+            executable: script.clone(),
+            config: root.join("config"),
+            queue: "test".into(),
+            timeout: std::time::Duration::from_secs(1),
+        };
+        let backend = |created: &str, status: Value| {
+            let value = json!({"tasks":{"1":{"id":1,"created_at":created,"status":status}}});
+            fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\n[ \"$5\" = status ] || exit 99\nprintf '%s' '{}'\n",
+                    value
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        };
+        let done = json!({"Done":{"result":{"Failed":9},"end":"finished"}});
+        backend("original", done.clone());
+        let settings = Results::default();
+        let (m, mut spool) = reserve(&store, &settings, &id).unwrap();
+        spool.write_all(b"partial secret").unwrap();
+        let dir = directory(&store).unwrap();
+        let original = fs::read(dir.join(format!("{id}.result"))).unwrap();
+        assert!(recover(&store, &adapter, &id).is_err());
+        assert_eq!(
+            fs::read(dir.join(format!("{id}.result"))).unwrap(),
+            original
+        );
+        let mut pending = read(&dir, &id).unwrap().unwrap();
+        pending.completion = Some(Completion {
+            finished_at: 123,
+            state: ChildState::Failed,
+            exit_code: Some(23),
+        });
+        publish(&dir, &pending).unwrap();
+        // Even a valid completion receipt cannot override a live worker's lease.
+        assert!(recover(&store, &adapter, &id).is_err());
+        drop(m);
+        drop(spool);
+        backend("recycled", done.clone());
+        assert!(recover(&store, &adapter, &id).is_err());
+        backend("original", json!("Running"));
+        assert!(recover(&store, &adapter, &id).is_err());
+        assert_eq!(read(&dir, &id).unwrap().unwrap().availability, "pending");
+        backend("original", done);
+        // Also cover a crash after output rename and before final publication.
+        fs::rename(
+            dir.join(format!("{id}.spool")),
+            dir.join(format!("{id}.output")),
+        )
+        .unwrap();
+        recover(&store, &adapter, &id).unwrap();
+        let recovered = read(&dir, &id).unwrap().unwrap();
+        assert_eq!(recovered.availability, "unavailable");
+        assert_eq!(recovered.exit_code, Some(23));
+        assert_eq!(recovered.finished_at, Some(123));
+        assert_eq!(recovered.reserved_bytes, 0);
+        assert!(!dir.join(format!("{id}.output")).exists());
+        assert!(!dir.join(format!("{id}.spool")).exists());
+        // No backend call is needed on an idempotent replay (daemon may be gone).
+        fs::remove_file(script).unwrap();
+        recover(&store, &adapter, &id).unwrap();
+        assert_eq!(store.history().unwrap(), vec![record]);
+    }
 
     fn artifact(
         items: &[Value],
@@ -1061,6 +1319,8 @@ mod tests {
             truncated: false,
             error: None,
             aggregate_state: None,
+            completion: None,
+            _lease: None,
         };
         publish(&dir, &m).unwrap();
         (temp, store, id)
