@@ -24,4 +24,4 @@ macOS arm64 / Pueue 4.0.4 / rustc 1.99.1でcoreテスト6件、check・clippy・
 既存契約の独立した実行証拠は `34-40-macos.md`。LinuxはPRのQuality workflowで確認する。
 runner回復 #68 と未集約子保護 #98 の未完了を、本PRで完了へ読み替えない。
 
-追加回帰: `AXVERN_TEST_BIN=$PWD/target/debug/axvern cargo test -p axvern-tests --locked` は全209テスト成功。任意tool内部の条件分岐をすべて実行した証明とはしない。
+追加回帰: `AXVERN_TEST_BIN=$PWD/target/debug/axvern cargo test -p axvern-tests --locked` は全202テスト成功。任意tool内部の条件分岐をすべて実行した証明とはしない。
