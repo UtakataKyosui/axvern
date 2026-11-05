@@ -810,7 +810,9 @@ fn structured_fragments(item: &Value, position: u64) -> Result<Vec<Value>, Error
         .filter_map(|(key, value)| {
             value
                 .as_str()
-                .filter(|text| text.len() > 128)
+                // The fragment payload uses `text`, so preserve an original text
+                // field as its own fragment even when it is short or empty.
+                .filter(|text| text.len() > 128 || key == "text")
                 .map(|text| (key, text))
         })
         .collect();
@@ -825,7 +827,7 @@ fn structured_fragments(item: &Value, position: u64) -> Result<Vec<Value>, Error
     for (field, text) in fields {
         let mut start = 0;
         let mut index = 0;
-        while start < text.len() {
+        while index == 0 || start < text.len() {
             let mut end = (start + 128).min(text.len());
             while !text.is_char_boundary(end) {
                 end -= 1;
@@ -1117,6 +1119,64 @@ mod tests {
         assert_eq!(reconstructed["body"], text);
         assert_eq!(reconstructed["snippet"], other);
         assert!(count > 2);
+    }
+
+    #[test]
+    fn fragmented_match_path_preserves_short_and_empty_matching_text() {
+        for text in ["match".to_owned(), "é".repeat(64), String::new()] {
+            let path = "segment/".repeat(200);
+            let item = MatchItem {
+                path: path.clone(),
+                line: 7,
+                text: text.clone(),
+                ranges: vec![],
+                context_before: vec![],
+                context_after: vec![],
+                line_truncated: false,
+            };
+            let (_temp, store, id) = artifact(&[serde_json::to_value(item).unwrap()], json!({}));
+            let mut token = None;
+            let mut reconstructed = std::collections::BTreeMap::<String, String>::new();
+            let mut indices = std::collections::BTreeMap::<String, u64>::new();
+            let mut ended = std::collections::BTreeSet::new();
+            let mut count = 0;
+            loop {
+                let (manifest, output) =
+                    page(&store, &Results::default(), &id, token.as_deref(), 1, 1024).unwrap();
+                assert!(fits_page(&manifest.unwrap(), &output, 1024).unwrap());
+                assert_eq!(
+                    page(&store, &Results::default(), &id, token.as_deref(), 1, 1024)
+                        .unwrap()
+                        .1,
+                    output
+                );
+                for fragment in output["result"]["items"].as_array().unwrap() {
+                    let field = fragment["text_field"].as_str().unwrap().to_owned();
+                    assert!(!ended.contains(&field));
+                    let index = indices.entry(field.clone()).or_default();
+                    assert_eq!(fragment["fragment_index"], *index);
+                    *index += 1;
+                    reconstructed
+                        .entry(field.clone())
+                        .or_default()
+                        .push_str(fragment["text"].as_str().unwrap());
+                    if fragment["continued"] == false {
+                        ended.insert(field);
+                    }
+                    assert_eq!(fragment.get("line").is_some(), count == 0);
+                    count += 1;
+                }
+                token = output["result"]["page"]["next_cursor"]
+                    .as_str()
+                    .map(str::to_owned);
+                if token.is_none() {
+                    break;
+                }
+            }
+            assert_eq!(reconstructed.get("path"), Some(&path));
+            assert_eq!(reconstructed.get("text"), Some(&text));
+            assert_eq!(ended.len(), 2);
+        }
     }
 
     #[test]
