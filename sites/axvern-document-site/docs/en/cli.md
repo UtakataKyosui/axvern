@@ -30,6 +30,8 @@ Target argv after `--` preserves empty strings, spaces, newlines, quotes, Unicod
 
 JSON stdout is one UTF-8 object plus LF. Diagnostics are in `error`/result data; only approval prompts use stderr. Every response has `schema_version`, `command`, `execution_id`, `state`, `exit_code`, `output`, `error`. Unavailable values are null. Target exit code is distinct from CLI exit status.
 
+Human responses also write ordinary diagnostics to stdout, with the stable error code and escaped message. Saved results show `result_availability`, target `exit_code` when known, `scope_complete`, `truncated`, truncation reasons and `has_more`; a continuation cursor is printed when present. A separate `result_error` explains storage failure without replacing the target's exit status. A final page can still be truncated at capture time.
+
 ```json
 {"schema_version":2,"command":"run","execution_id":"ex_550e8400-e29b-41d4-a716-446655440000","state":"running","exit_code":null,"output":{"result_availability":"pending","result":null},"error":null}
 ```
