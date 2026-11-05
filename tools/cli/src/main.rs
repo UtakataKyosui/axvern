@@ -864,6 +864,9 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                             v.task.as_ref().map(|t| t.state.into()),
                         )?;
                         let mut value = serde_json::to_value(v).expect("view JSON");
+                        // Rewrite records retain original and rewritten argv privately;
+                        // history lists execution metadata, not command arguments.
+                        value["record"].as_object_mut().unwrap().remove("rewrite");
                         value["result_availability"] = json!(a);
                         value["command"] = json!("run");
                         Ok(value)
