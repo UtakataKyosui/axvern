@@ -95,24 +95,35 @@ fn fixtures_normalize_all_results_and_reject_unknown_schema() {
             PueueAdapter::parse_status("private", &serde_json::to_vec(&data).unwrap()).unwrap();
         assert_eq!((tasks[0].state, tasks[0].exit_code), (state, code));
     }
-    for status in [
-        json!({"Queued":{}}),
-        json!({"Stashed":{"enqueue_at":null}}),
-        json!({"Locked":{"previous_status":{"Queued":{}}}}),
-        json!({"Running":{"start":"now"}}),
-        json!({"Paused":{"start":"now"}}),
+    for (status, expected) in [
+        (json!({"Queued":{}}), ChildState::Queued),
+        (json!({"Stashed":{"enqueue_at":null}}), ChildState::Queued),
+        (
+            json!({"Locked":{"previous_status":{"Queued":{}}}}),
+            ChildState::Queued,
+        ),
+        (json!({"Running":{"start":"now"}}), ChildState::Running),
+        (json!({"Paused":{"start":"now"}}), ChildState::Running),
     ] {
-        assert!(
-            PueueAdapter::parse_status(
-                "q",
-                &serde_json::to_vec(
-                    &json!({"tasks":{"0":{"id":0,"created_at":"time","status":status}}})
-                )
-                .unwrap()
+        let tasks = PueueAdapter::parse_status(
+            "q",
+            &serde_json::to_vec(
+                &json!({"tasks":{"0":{"id":0,"created_at":"time","status":status}}}),
             )
-            .is_ok()
-        );
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tasks[0].state, expected);
+        assert_eq!(tasks[0].exit_code, None);
+        assert_eq!(tasks[0].finished_at, None);
     }
+    let unknown = json!({"tasks":{"0":{"id":0,"created_at":"time","status":{"FutureState":{}}}}});
+    assert_eq!(
+        PueueAdapter::parse_status("q", &serde_json::to_vec(&unknown).unwrap())
+            .unwrap_err()
+            .code,
+        ErrorCode::BackendFailure
+    );
     for bytes in [b"invalid".as_slice(), b"{}", br#"{"tasks":{"0":{"id":1}}}"#] {
         assert_eq!(
             PueueAdapter::parse_status("q", bytes).unwrap_err().code,
