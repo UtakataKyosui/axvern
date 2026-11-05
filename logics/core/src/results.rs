@@ -498,12 +498,17 @@ fn cursor(id: &ExecutionId, offset: u64, index: u64) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-fn offset(id: &ExecutionId, token: Option<&str>) -> Result<(u64, u64), Error> {
+fn offset(id: &ExecutionId, token: Option<&str>) -> Result<(u64, u64, bool), Error> {
     let Some(token) = token else {
-        return Ok((0, 0));
+        return Ok((0, 0, false));
     };
     let bad = || Error::new(ErrorCode::InvalidCursor, "invalid cursor");
-    if token.len() > 128 || token.len() % 2 != 0 {
+    if token.len() > 128
+        || token.len() % 2 != 0
+        || !token
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err(bad());
     }
     let bytes: Vec<_> = token
@@ -521,6 +526,9 @@ fn offset(id: &ExecutionId, token: Option<&str>) -> Result<(u64, u64), Error> {
     let s = String::from_utf8(bytes).map_err(|_| bad())?;
     let (owner_offset, index) = s.rsplit_once(':').ok_or_else(bad)?;
     let (owner, n) = owner_offset.rsplit_once(':').ok_or_else(bad)?;
+    let (owner, structured) = owner
+        .strip_suffix(":s")
+        .map_or((owner, false), |v| (v, true));
     if owner != id.to_string() {
         return Err(bad());
     }
@@ -528,12 +536,12 @@ fn offset(id: &ExecutionId, token: Option<&str>) -> Result<(u64, u64), Error> {
     let fragment: u64 = index.parse().map_err(|_| bad())?;
     if position.to_string() != n
         || fragment.to_string() != index
-        || fragment > position
-        || (position == 0) != (fragment == 0)
+        || (structured && position == 0)
+        || (!structured && (fragment > position || (position == 0) != (fragment == 0)))
     {
         return Err(bad());
     }
-    Ok((position, fragment))
+    Ok((position, fragment, structured))
 }
 pub fn page(
     store: &ExecutionStore,
@@ -543,7 +551,7 @@ pub fn page(
     limit: usize,
     max_bytes: usize,
 ) -> Result<(Option<Manifest>, Value), Error> {
-    let (start, mut index) = offset(id, token)?;
+    let (start, mut index, structured) = offset(id, token)?;
     let _lock = store.lock()?;
     maintain(store, settings, 0)?;
     let dir = directory(store)?;
@@ -560,8 +568,31 @@ pub fn page(
         ));
     }
     if m.kind != "run" {
-        let output = structured_page(&dir, &m, start, index, limit, max_bytes)?;
+        let output = structured_page(
+            &dir,
+            &m,
+            start,
+            if structured { index } else { 0 },
+            limit,
+            max_bytes,
+        );
+        let output = match output {
+            Ok(output) => output,
+            Err(error) if error.code == ErrorCode::UnsupportedToolCapability => {
+                let mut unavailable = m;
+                unavailable.availability = "unavailable".into();
+                unavailable.error = Some(error.clone());
+                return Ok((
+                    Some(unavailable),
+                    json!({"result_availability":"unavailable","result":null,"result_error":error}),
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         return Ok((Some(m), output));
+    }
+    if structured {
+        return Err(Error::new(ErrorCode::InvalidCursor, "invalid cursor"));
     }
     if start > m.bytes {
         return Err(Error::new(ErrorCode::InvalidCursor, "invalid cursor"));
@@ -702,17 +733,53 @@ fn structured_page(
         if n == 0 {
             return Err(failure());
         }
-        items.push(serde_json::from_slice::<Value>(&line).map_err(|_| failure())?);
-        if !fits_page(
-            m,
-            &structured_output(m, &head, &items, position + n, index + 1),
-            budget,
-        )? {
-            items.pop();
+        let item = serde_json::from_slice::<Value>(&line).map_err(|_| failure())?;
+        let fragments = if index == 0
+            && fits_page(
+                m,
+                &structured_output(m, &head, std::slice::from_ref(&item), position + n, 0),
+                budget,
+            )? {
+            vec![item.clone()]
+        } else {
+            structured_fragments(&item, position)?
+        };
+        if fragments.len() == 1 && serde_json::to_vec(&item).map_err(|_| failure())?.len() > 65536 {
+            return Err(Error::new(
+                ErrorCode::UnsupportedToolCapability,
+                "structured item cannot be represented without a text fragment",
+            ));
+        }
+        if index as usize >= fragments.len() {
+            return Err(invalid());
+        }
+        let mut advanced = false;
+        for fragment in &fragments[index as usize..] {
+            if items.len() == limit {
+                break;
+            }
+            let last = index as usize + 1 == fragments.len();
+            let next_position = if last { position + n } else { position };
+            let next_index = if last { 0 } else { index + 1 };
+            items.push(fragment.clone());
+            if !fits_page(
+                m,
+                &structured_output(m, &head, &items, next_position, next_index),
+                budget,
+            )? {
+                items.pop();
+                break;
+            }
+            index = next_index;
+            if last {
+                position = next_position;
+                advanced = true;
+                break;
+            }
+        }
+        if !advanced {
             break;
         }
-        position += n;
-        index += 1;
     }
     if items.is_empty() && position < m.bytes {
         return Err(Error::new(
@@ -729,6 +796,57 @@ fn structured_page(
     }
     Ok(output)
 }
+/// Fragment large string fields without rewriting the stored artifact. Offsets identify
+/// the original item; only the first fragment carries its non-text attributes.
+fn structured_fragments(item: &Value, position: u64) -> Result<Vec<Value>, Error> {
+    if serde_json::to_vec(item).map_err(|_| failure())?.len() <= 256 {
+        return Ok(vec![item.clone()]);
+    }
+    let Some(object) = item.as_object() else {
+        return Ok(vec![item.clone()]);
+    };
+    let fields: Vec<_> = object
+        .iter()
+        .filter_map(|(key, value)| {
+            value
+                .as_str()
+                .filter(|text| text.len() > 128)
+                .map(|text| (key, text))
+        })
+        .collect();
+    if fields.is_empty() {
+        return Ok(vec![item.clone()]);
+    }
+    let mut attributes = object.clone();
+    for (key, _) in &fields {
+        attributes.remove(*key);
+    }
+    let mut fragments = Vec::new();
+    for (field, text) in fields {
+        let mut start = 0;
+        let mut index = 0;
+        while start < text.len() {
+            let mut end = (start + 128).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let mut fragment = if fragments.is_empty() {
+                attributes.clone()
+            } else {
+                serde_json::Map::new()
+            };
+            fragment.insert("item_id".into(), json!(format!("item-{position}")));
+            fragment.insert("text_field".into(), json!(field));
+            fragment.insert("fragment_index".into(), json!(index));
+            fragment.insert("continued".into(), json!(end < text.len()));
+            fragment.insert("text".into(), json!(&text[start..end]));
+            fragments.push(Value::Object(fragment));
+            index += 1;
+            start = end;
+        }
+    }
+    Ok(fragments)
+}
 fn structured_output(
     m: &Manifest,
     head: &Value,
@@ -738,7 +856,7 @@ fn structured_output(
 ) -> Value {
     let mut output = json!({"result_availability":"available", "result":{"kind":m.kind, "summary":head["summary"], "items":items,
         "completeness":head["completeness"], "errors":head["errors"], "warnings":head["warnings"],
-        "page":{"has_more":position<m.bytes,"next_cursor":if position<m.bytes { Some(cursor(&m.execution_id,position,index)) } else { None }}}});
+        "page":{"has_more":position<m.bytes,"next_cursor":if position<m.bytes { Some(format!("{}:s:{position}:{index}",m.execution_id).bytes().map(|b| format!("{b:02x}")).collect::<String>()) } else { None }}}});
     // An aggregate repeats its children's outcomes on every page.
     if let Some(children) = head.get("children") {
         output["result"]["children"] = children.clone();
@@ -902,4 +1020,130 @@ pub(crate) fn encode_document(doc: &DiscoveryDocument) -> Result<(Vec<u8>, Vec<V
         .map(|item| line(serde_json::to_value(item).map_err(|_| failure())?))
         .collect::<Result<_, _>>()?;
     Ok((header, items))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn artifact(
+        items: &[Value],
+        summary: Value,
+    ) -> (tempfile::TempDir, ExecutionStore, ExecutionId) {
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            ExecutionStore::open(temp.path().canonicalize().unwrap().join("store")).unwrap();
+        let id = ExecutionStore::allocate_id().unwrap();
+        let dir = directory(&store).unwrap();
+        let path = dir.join(format!("{id}.output"));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
+        writeln!(file, "{}", json!({"summary":summary,"completeness":{"scope_complete":true,"truncated":false,"truncation_reasons":[]},"errors":[],"warnings":[]})).unwrap();
+        for item in items {
+            writeln!(file, "{item}").unwrap();
+        }
+        let m = Manifest {
+            schema_version: 1,
+            execution_id: id.clone(),
+            finished_at: Some(now()),
+            state: Some(ChildState::Done),
+            exit_code: Some(0),
+            availability: "available".into(),
+            kind: "fs.read".into(),
+            reserved_bytes: 0,
+            bytes: file.metadata().unwrap().len(),
+            truncated: false,
+            error: None,
+            aggregate_state: None,
+        };
+        publish(&dir, &m).unwrap();
+        (temp, store, id)
+    }
+
+    #[test]
+    fn structured_text_fragments_reconstruct_and_replay_with_wire_budget() {
+        let text = "あ\n\u{1b}".repeat(1000);
+        let other = "別の本文".repeat(100);
+        let (_temp, store, id) = artifact(
+            &[json!({"path":"example","line":1,"body":text,"snippet":other})],
+            json!({}),
+        );
+        let settings = Results::default();
+        let mut token = None;
+        let mut reconstructed = std::collections::BTreeMap::<String, String>::new();
+        let mut indices = std::collections::BTreeMap::<String, u64>::new();
+        let mut count = 0;
+        loop {
+            let (manifest, output) =
+                page(&store, &settings, &id, token.as_deref(), 2, 1024).unwrap();
+            assert_eq!(
+                page(&store, &settings, &id, token.as_deref(), 2, 1024)
+                    .unwrap()
+                    .1,
+                output
+            );
+            assert!(fits_page(&manifest.unwrap(), &output, 1024).unwrap());
+            for item in output["result"]["items"].as_array().unwrap() {
+                let field = item["text_field"].as_str().unwrap().to_owned();
+                let index = indices.entry(field.clone()).or_default();
+                assert_eq!(item["fragment_index"], *index);
+                *index += 1;
+                reconstructed
+                    .entry(field)
+                    .or_default()
+                    .push_str(item["text"].as_str().unwrap());
+                assert_eq!(item.get("path").is_some(), count == 0);
+                count += 1;
+            }
+            token = output["result"]["page"]["next_cursor"]
+                .as_str()
+                .map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+            assert!(token.as_ref().unwrap().len() <= 128);
+            let foreign = ExecutionStore::allocate_id().unwrap();
+            assert_eq!(
+                page(&store, &settings, &foreign, token.as_deref(), 2, 1024)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::InvalidCursor
+            );
+        }
+        assert_eq!(reconstructed["body"], text);
+        assert_eq!(reconstructed["snippet"], other);
+        assert!(count > 2);
+    }
+
+    #[test]
+    fn structured_record_limit_and_oversized_summary_are_explicit() {
+        let records: Vec<_> = (0..101).map(|i| json!({"line":i})).collect();
+        let (_temp, store, id) = artifact(&records, json!({}));
+        let settings = Results::default();
+        let (_, first) = page(&store, &settings, &id, None, 100, 65536).unwrap();
+        assert_eq!(first["result"]["items"].as_array().unwrap().len(), 100);
+        let token = first["result"]["page"]["next_cursor"].as_str().unwrap();
+        let (_, last) = page(&store, &settings, &id, Some(token), 100, 65536).unwrap();
+        assert_eq!(last["result"]["items"], json!([{"line":100}]));
+        assert_eq!(last["result"]["page"]["has_more"], false);
+        let (_temp, store, id) = artifact(&[], json!({"huge":"a".repeat(65536)}));
+        assert_eq!(
+            page(&store, &settings, &id, None, 100, 65536)
+                .unwrap_err()
+                .code,
+            ErrorCode::OutputLimitTooSmall
+        );
+        let (_temp, store, id) = artifact(&[json!({"values":vec![0;70000]})], json!({}));
+        let (manifest, output) = page(&store, &settings, &id, None, 100, 65536).unwrap();
+        assert_eq!(manifest.unwrap().availability, "unavailable");
+        assert!(output["result"].is_null());
+        assert_eq!(
+            output["result_error"]["code"],
+            "unsupported_tool_capability"
+        );
+    }
 }

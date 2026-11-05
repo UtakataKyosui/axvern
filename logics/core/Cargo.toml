@@ -15,5 +15,8 @@ globset.workspace = true
 ignore.workspace = true
 libc.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

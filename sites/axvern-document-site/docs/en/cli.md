@@ -46,6 +46,8 @@ An immediately completed run and later `result` use the same result structure: `
 
 A page returns at most 100 fragments (default 100, range 1–100) and 64KiB including its JSON envelope and LF (`--max-bytes` range 1024–65536). Escaped JSON size is counted. Cursors belong to one immutable execution artifact. Replay returns the same page while retained. `has_more`/`next_cursor` describe saved pages; `completeness.truncated` separately describes the preview's capture limit. An undersized response is `output_limit_too_small` (11).
 
+Large structured string fields also use fragments. Each carries the original item's stable `item_id`, `text_field`, a per-field `fragment_index`, `continued`, and `text`. Non-text attributes appear only on the first fragment. Reconstruct each field in fragment order until `continued=false`. The stored artifact remains unchanged; use the returned opaque cursor for continuation. Oversized summaries return `output_limit_too_small`; a non-text item exceeding the maximum page size is unavailable with `unsupported_tool_capability` (retrieval exit 11).
+
 Availability is `pending`, `available`, `expired`, `evicted` or `unavailable`. Pending results are null. Expiry and capacity eviction return distinct typed errors (11), never rerun the target, and retain tombstones. A successfully fetched result exits 0 even when the target exited 23. A killed/crashed runner can leave an active reservation; automatic repair/reexecution is deliberately unavailable.
 
 ## Doctor
