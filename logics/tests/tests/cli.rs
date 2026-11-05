@@ -118,6 +118,23 @@ fn human_results_report_availability_completeness_and_target_exit() {
     }
 }
 #[test]
+fn result_recovery_rejects_pagination_and_extra_operands_before_backend_access() {
+    let id = "ex_550e8400-e29b-41d4-a716-446655440000";
+    for suffix in [
+        vec!["--limit", "1"],
+        vec!["--cursor", "00"],
+        vec!["extra"],
+        vec!["--wait", "1s"],
+    ] {
+        let mut args = vec!["result", "recover", id];
+        args.extend(suffix);
+        let result = cli(&args, None);
+        assert_eq!(result.status.code(), Some(2));
+        let response: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(response["error"]["code"], "invalid_input");
+    }
+}
+#[test]
 fn policy_check_reports_all_decisions_without_executing_target() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("SHOULD_NOT_EXIST");

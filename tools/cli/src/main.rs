@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s] | system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s] | code diff [--staged] [--wait 1s] | system processes [--match TEXT] [--limit 100] [--wait 1s] | query <execution-id> (--match TEXT | --errors | --tail N | --from-line N --lines M) [--limit 100] [--max-bytes 65536] | recall <execution-id> [--output FILE]";
+const USAGE: &str = "usage: axvern [--config PATH] [--format human|json] run [--cwd PATH] [--wait 1s] [--request-id KEY] -- <program> [args...] | result <execution-id> [--cursor TOKEN] [--limit 100] [--max-bytes 65536] | result recover <execution-id> | status <execution-id> | wait <execution-id> [--timeout 30s] | history [--limit 20] | doctor [--scope core|discovery|logs|performance|all] | policy check [--cwd PATH] -- <program> [args...] | fs list [PATH] [--depth 1] [--include-ignored] [--wait 1s] | fs find PATTERN [PATH] [--glob] [--full-path] [--extension EXT] [--type file|directory|symlink|any] [--depth 32] [--include-ignored] [--ignore-case] [--wait 1s] | fs search PATTERN [PATH] [--fixed-strings] [--glob GLOB] [--context 0] [--ignore-case] [--include-ignored] [--wait 1s] | fs read FILE [--from-line 1] [--lines 80] [--wait 1s] | fs analyze PATH [--depth 3] [--include-ignored] [--wait 1s] | code search --pattern PATTERN --lang rust|javascript|typescript|python|go [PATH] [--include-ignored] [--wait 1s] | code stats [PATH] [--include-ignored] [--wait 1s] | system disk-usage [PATH] [--depth 3] [--top 20] [--size allocated|apparent] [--wait 1s] | code diff [--staged] [--wait 1s] | system processes [--match TEXT] [--limit 100] [--wait 1s] | query <execution-id> (--match TEXT | --errors | --tail N | --from-line N --lines M) [--limit 100] [--max-bytes 65536] | recall <execution-id> [--output FILE]";
 struct Input {
     command: String,
     config: Option<PathBuf>,
@@ -302,6 +302,10 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
         }
         ["status" | "wait" | "result", id] if boundary == args.len() => {
             input.id = Some(id.parse()?)
+        }
+        ["result", "recover", id] if boundary == args.len() => {
+            input.command = "result recover".into();
+            input.id = Some(id.parse()?);
         }
         ["query" | "recall", id] if boundary == args.len() => input.id = Some(id.parse()?),
         ["history" | "doctor"] if boundary == args.len() => (),
@@ -790,6 +794,17 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
             }
         }
         "query" | "recall" => logs_response(&service, &config, input),
+        "result recover" => {
+            let id = input.id.as_ref().expect("parsed ID");
+            match axvern_core::results::recover(&service.store, &service.adapter, id) {
+                Ok(()) => {
+                    let mut response = Response::success(json!({"recovery":"checked"}));
+                    response.execution_id = Some(id.clone());
+                    (response, 0)
+                }
+                Err(error) => failure(error),
+            }
+        }
         "result" => {
             let id = input.id.as_ref().expect("parsed ID");
             if let Err(e) = service.store.find_record(id) {
