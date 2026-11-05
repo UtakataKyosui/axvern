@@ -1600,6 +1600,16 @@ fn human(response: &Response<Value>) {
                 println!("exit_code: {code}");
             }
         }
+        if let Some(availability) = output["result_availability"].as_str() {
+            println!("result_availability: {}", visible(availability));
+        }
+        if let Some(error) = output.get("result_error").filter(|e| !e.is_null()) {
+            println!(
+                "result_error: {}: {}",
+                visible(error["code"].as_str().unwrap_or("unknown")),
+                visible(error["message"].as_str().unwrap_or(""))
+            );
+        }
     }
     if let Some(result) = response.output.as_ref().and_then(|o| o.get("result")) {
         if let Some(items) = result["items"].as_array() {
@@ -1695,15 +1705,33 @@ fn human(response: &Response<Value>) {
         if result["completeness"]["partial"] == true {
             println!("partial: true");
         }
-        if result["completeness"]["truncated"] == true {
-            println!("truncated: true");
+        for field in ["scope_complete", "truncated"] {
+            if let Some(value) = result["completeness"][field].as_bool() {
+                println!("{field}: {value}");
+            }
+        }
+        if let Some(reasons) = result["completeness"]["truncation_reasons"].as_array() {
+            for reason in reasons {
+                println!(
+                    "truncation_reason: {}",
+                    visible(reason.as_str().unwrap_or("unknown"))
+                );
+            }
+        }
+        if let Some(has_more) = result["page"]["has_more"].as_bool() {
+            println!("has_more: {has_more}");
         }
         if let Some(cursor) = result["page"]["next_cursor"].as_str() {
             println!("next_cursor: {cursor}");
         }
     }
     if let Some(error) = &response.error {
-        eprintln!("{}", visible(&error.to_string()));
+        let code = serde_json::to_value(error.code).expect("error code JSON");
+        println!(
+            "error: {}: {}",
+            code.as_str().unwrap(),
+            visible(&error.message)
+        );
     }
 }
 fn main() {

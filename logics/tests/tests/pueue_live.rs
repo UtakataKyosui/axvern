@@ -172,10 +172,11 @@ fn public_cli_execute_doctor_and_history_contracts() {
     }
     assert_eq!(q.adapter.list().unwrap(), before);
     let human = public_cli(&q, &config, &["run", "--format", "human", "--", "false"]);
-    assert_eq!(human.stdout, b"");
+    assert_eq!(human.status.code(), Some(9));
+    assert!(human.stderr.is_empty());
     assert_eq!(
-        human.stderr,
-        b"PolicyDenied: policy or approval refused registration\n"
+        human.stdout,
+        b"error: policy_denied: policy or approval refused registration\n"
     );
     let unknown = "ex_550e8400-e29b-41d4-a716-446655440000";
     let unknown_json = cli_json(&q, &config, &["status", unknown, "--format", "json"], 7);

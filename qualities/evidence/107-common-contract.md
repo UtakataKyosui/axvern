@@ -18,3 +18,23 @@
 隔離Pueueにはsandbox外のUnix socket権限が必要。通常sandbox内のdaemon起動失敗は成功証拠に含めない。
 LinuxはPRのQuality workflowで検証する。巨大structured itemの差分は #112、未集約子保護は #98、runner強制終了後の安全回復は #68 の責務として残す。
 各関連Issueが未完了のまま共通契約全体を受入済みとはしない。
+
+## human出力の共通契約差分（2026-11-06）
+
+要件 #34の「通常診断はerror/warnings、stderrは承認プロンプトのみ」と要件 #65のhuman結果表示を照合した。
+humanの通常エラーがstderrへ出ること、およびresult_availability・result_error・has_moreが表示されないことを追加テストで再現した。
+
+CLI `human` を修正し、通常エラーは安定したsnake_caseコードとescape済みmessageをstdoutへ返す。
+CLI終了値は変更しない。保存結果ではavailability、保存失敗の独立したresult_error、scope_complete、
+truncatedと理由、has_moreを表示する。最終ページでも採取時の欠落がある場合を区別でき、対象exit23も保持する。
+JSON schemaや保存処理、Pueue登録処理は変更しない。
+
+- `cli::human_query_errors_use_stdout_like_json_without_changing_exit_status`: configエラーのJSON/humanともexit3、stderr空、安定コード。
+- `cli::human_results_report_availability_completeness_and_target_exit`: offline保存結果のavailable/unavailable、最終ページとcapture切詰め、exit23、保存失敗原因の表示と制御文字escape。
+- `pueue_live::public_cli_execute_doctor_and_history_contracts`: Policy拒否のhuman期待値を確定契約へ合わせ、exit9と未登録を維持。
+
+修正前に追加2テストの失敗を確認し、修正後に成功を確認した。
+macOS 27 arm64 / rustc 1.99.1 / Pueue 4.0.4でworkspace check/build、clippy全target（warnings拒否）、
+fmt、site check/build、文書リンク42件を検証。Linuxの追加受入は本変更のPR CIで確認する。
+`AXVERN_TEST_BIN=$PWD/target/debug/axvern cargo test -p axvern-tests --locked --test cli --test contract_v2 --test backend_store --test pueue_live` は43件成功・skipなし。
+#112の回復入口は別PR #125で扱い、本変更で重複実装・マージ・Issue closeを行わない。

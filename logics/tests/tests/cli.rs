@@ -30,6 +30,94 @@ fn private_config(text: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 #[test]
+fn human_query_errors_use_stdout_like_json_without_changing_exit_status() {
+    let (_dir, config) = private_config("schema_version=99\n");
+    for format in ["json", "human"] {
+        let result = cli(&["history", "--format", format], Some(&config));
+        assert_eq!(result.status.code(), Some(3));
+        assert!(result.stderr.is_empty(), "{format}: {result:?}");
+        assert!(
+            String::from_utf8(result.stdout)
+                .unwrap()
+                .contains("invalid_config")
+        );
+    }
+}
+
+#[test]
+fn human_results_report_availability_completeness_and_target_exit() {
+    use axvern_core::{results, store::ExecutionStore};
+    use axvern_models::*;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let store = ExecutionStore::open(root.join("store")).unwrap();
+    let id = ExecutionStore::allocate_id().unwrap();
+    store
+        .save_record(&ExecutionRecord {
+            execution_id: id.clone(),
+            backend: BackendIdentity {
+                queue: "offline".into(),
+                task_id: 1,
+                created_at: "original".into(),
+            },
+            registered_at: results::now(),
+            cwd: root.to_str().unwrap().into(),
+            rewrite: None,
+        })
+        .unwrap();
+    let dir = root.join("store/results");
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+    let pueue = root.join("pueue.yml");
+    std::fs::write(&pueue, "shared: {}\n").unwrap();
+    let (_config_dir, config) = private_config(&format!(
+        "schema_version=1\n[execution]\nstore={}\npueue_config={}\n",
+        serde_json::to_string(&root.join("store")).unwrap(),
+        serde_json::to_string(&pueue).unwrap()
+    ));
+    let manifest = dir.join(format!("{id}.result"));
+    let output = dir.join(format!("{id}.output"));
+    for availability in ["available", "unavailable"] {
+        let error = if availability == "unavailable" {
+            serde_json::json!({"code":"store_failure","message":"capture failed\u{1b}[31m"})
+        } else {
+            serde_json::Value::Null
+        };
+        std::fs::write(&manifest, serde_json::to_vec(&serde_json::json!({
+            "schema_version":1,"execution_id":id,"finished_at":results::now(),"state":"failed","exit_code":23,
+            "availability":availability,"kind":"run","reserved_bytes":0,"bytes":6,"truncated":true,"error":error
+        })).unwrap()).unwrap();
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&output, b"hello\n").unwrap();
+        std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let result = cli(
+            &["result", &id.to_string(), "--format", "human"],
+            Some(&config),
+        );
+        assert_eq!(
+            result.status.code(),
+            Some(if availability == "available" { 0 } else { 11 })
+        );
+        assert!(result.stderr.is_empty());
+        let text = String::from_utf8(result.stdout).unwrap();
+        assert!(
+            text.contains(&format!("result_availability: {availability}")),
+            "{text}"
+        );
+        assert!(text.contains("exit_code: 23"), "{text}");
+        assert!(!text.contains('\u{1b}'));
+        if availability == "available" {
+            assert!(text.contains("has_more: false"), "{text}");
+            assert!(text.contains("scope_complete: false"), "{text}");
+            assert!(text.contains("truncated: true"), "{text}");
+            assert!(text.contains("truncation_reason: artifact_limit"), "{text}");
+        } else {
+            assert!(text.contains("store_failure"), "{text}");
+            assert!(text.contains("capture failed\\u{1b}[31m"), "{text}");
+        }
+    }
+}
+#[test]
 fn result_recovery_rejects_pagination_and_extra_operands_before_backend_access() {
     let id = "ex_550e8400-e29b-41d4-a716-446655440000";
     for suffix in [
