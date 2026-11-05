@@ -503,3 +503,30 @@ fn result_max_bytes_accepts_only_plain_digits_within_the_wire_budget() {
         assert_ne!(code_for(accepted), "invalid_input", "{accepted:?}");
     }
 }
+
+#[test]
+fn unknown_execution_uses_the_same_exit_code_for_each_query_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().canonicalize().unwrap().join("store");
+    let pueue = dir.path().canonicalize().unwrap().join("pueue.yml");
+    std::fs::write(&pueue, "shared: {}\n").unwrap();
+    let (_config_dir, config) = private_config(&format!(
+        "schema_version=1\n[execution]\nstore={}\npueue_config={}\n",
+        serde_json::to_string(&store).unwrap(),
+        serde_json::to_string(&pueue).unwrap()
+    ));
+    let id = "ex_550e8400-e29b-41d4-a716-446655440000";
+    for command in ["result", "status", "wait"] {
+        for format in ["json", "human"] {
+            let out = cli(&[command, id, "--format", format], Some(&config));
+            assert_eq!(out.status.code(), Some(7), "{command} {format}: {out:?}");
+            if format == "json" {
+                assert!(out.stderr.is_empty());
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                assert_eq!(value["schema_version"], 2);
+                assert_eq!(value["error"]["code"], "task_not_found");
+                assert!(value["exit_code"].is_null());
+            }
+        }
+    }
+}
