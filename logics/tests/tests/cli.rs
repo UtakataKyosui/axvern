@@ -530,3 +530,74 @@ fn unknown_execution_uses_the_same_exit_code_for_each_query_format() {
         }
     }
 }
+
+#[test]
+fn offline_history_is_ordered_bounded_and_does_not_disclose_rewritten_argv() {
+    use axvern_core::store::ExecutionStore;
+    use axvern_models::*;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let pueue = root.join("pueue.yml");
+    std::fs::write(
+        &pueue,
+        format!(
+            "shared:\n  use_unix_socket: true\n  unix_socket_path: {}\n",
+            root.join("missing-socket").display()
+        ),
+    )
+    .unwrap();
+    let store = ExecutionStore::open(root.join("store")).unwrap();
+    let (_dir, config) = private_config(&format!(
+        "schema_version=1\n[execution]\nstore={}\npueue_config={}\n",
+        serde_json::to_string(&root.join("store")).unwrap(),
+        serde_json::to_string(&pueue).unwrap()
+    ));
+    let empty = cli(&["history"], Some(&config));
+    assert_eq!(empty.status.code(), Some(0));
+    let value: serde_json::Value = serde_json::from_slice(&empty.stdout).unwrap();
+    assert_eq!(value["output"]["executions"], serde_json::json!([]));
+    let plan = JsonExecutionPlan::try_from(&ExecutionPlan {
+        program: "printf".into(),
+        args: vec!["HISTORY_SECRET".into()],
+        cwd: root.clone(),
+    })
+    .unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let id = ExecutionStore::allocate_id().unwrap();
+        ids.push(id.to_string());
+        store
+            .save_record(&ExecutionRecord {
+                execution_id: id,
+                backend: BackendIdentity {
+                    queue: "private".into(),
+                    task_id: 1,
+                    created_at: "time".into(),
+                },
+                registered_at: 100,
+                cwd: root.to_string_lossy().into(),
+                rewrite: Some(RewriteRecord {
+                    rule_id: "rule".into(),
+                    original: plan.clone(),
+                    rewritten: plan.clone(),
+                }),
+            })
+            .unwrap();
+    }
+    ids.sort();
+    ids.reverse();
+    let before = store.history().unwrap();
+    for limit in [1, 2, 3] {
+        let out = cli(&["history", "--limit", &limit.to_string()], Some(&config));
+        assert_eq!(out.status.code(), Some(11));
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("HISTORY_SECRET"));
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["error"]["code"], "partial_result");
+        let rows = value["output"]["executions"].as_array().unwrap();
+        assert_eq!(rows.len(), limit);
+        for (row, id) in rows.iter().zip(&ids) {
+            assert_eq!(row["record"]["execution_id"], *id);
+        }
+    }
+    assert_eq!(store.history().unwrap(), before);
+}
