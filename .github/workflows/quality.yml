@@ -249,7 +249,9 @@ jobs:
   # Single stable check for branch protection; skipped groups count as passing.
   quality:
     needs: [changes, fmt, rust, site, links]
-    if: always()
+    # Superseded runs must not publish a failing aggregate after cancellation.
+    # Failed dependencies still reach this job and fail the result check below.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
