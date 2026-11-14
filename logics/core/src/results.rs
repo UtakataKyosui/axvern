@@ -525,10 +525,10 @@ pub fn run_worker(
         .spawn();
     let status = match child {
         Ok(mut child) => {
-            let out = child.stdout.take().unwrap();
-            let err = child.stderr.take().unwrap();
-            let a = capture.clone();
-            let b = capture.clone();
+            let out = child.stdout.take().expect("stdout is piped");
+            let err = child.stderr.take().expect("stderr is piped");
+            let a = Arc::clone(&capture);
+            let b = Arc::clone(&capture);
             let out = std::thread::spawn(move || drain(out, a));
             let err = std::thread::spawn(move || drain(err, b));
             let status = child.wait();
@@ -1051,7 +1051,10 @@ impl<'a> Derivation<'a> {
         Ok(wanted.min(free - 32768))
     }
     /// Publish `header` and `items` as the immutable available result of `id`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the published result header fields"
+    )]
     pub(crate) fn publish(
         &self,
         id: &ExecutionId,

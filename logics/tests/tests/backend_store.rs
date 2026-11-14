@@ -24,7 +24,7 @@ fn concurrent_records_idempotency_and_cleanup() {
     let store = Arc::new(ExecutionStore::open(temp.path().join("store")).unwrap());
     let workers: Vec<_> = (0..24)
         .map(|_| {
-            let store = store.clone();
+            let store = Arc::clone(&store);
             thread::spawn(move || {
                 let record = record();
                 store.save_record(&record).unwrap();
@@ -340,7 +340,7 @@ elif 'log' in sys.argv:
     )
     .unwrap();
     assert_eq!(adapter.output_owned(&identity, 1000).unwrap(), b"owned");
-    let mut foreign = identity.clone();
+    let mut foreign = identity;
     foreign.queue = "another".into();
     assert_eq!(
         adapter.output_owned(&foreign, 1000).unwrap_err().code,

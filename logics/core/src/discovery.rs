@@ -492,7 +492,10 @@ fn execute(
             Vec::new(),
         );
     };
-    let (mut stdout, mut stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let (mut stdout, mut stderr) = (
+        child.stdout.take().expect("stdout is piped"),
+        child.stderr.take().expect("stderr is piped"),
+    );
     let (tx, rx) = sync_channel::<Vec<u8>>(8);
     let out = thread::spawn(move || {
         let mut buffer = vec![0; 64 * 1024];

@@ -1,4 +1,5 @@
 //! Core use cases and concrete I/O boundaries.
+#![warn(clippy::unwrap_used)]
 pub mod adapters;
 pub mod analyze;
 pub mod config;

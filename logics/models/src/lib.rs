@@ -1,4 +1,5 @@
 //! Shared contracts. Native argv stays native until an explicitly checked JSON boundary.
+#![warn(clippy::unwrap_used)]
 mod analysis;
 mod discovery;
 mod logs;

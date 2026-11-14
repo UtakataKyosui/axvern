@@ -590,7 +590,7 @@ fn fd_uses_only_gitignore_with_nested_negations_and_explicit_roots() {
     for name in names {
         fs::write(root.join(name), "x").unwrap();
     }
-    let bytes = names.join("\0") + "\0";
+    let bytes = format!("{}\0", names.join("\0"));
     let paths = |outcome: DiscoveryOutcome| {
         outcome
             .document

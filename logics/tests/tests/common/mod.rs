@@ -1,5 +1,8 @@
 //! Isolated Pueue daemon and public-CLI helpers shared by the live tests.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test crate uses a different subset of these helpers"
+)]
 use axvern_core::adapters::pueue::PueueAdapter;
 use axvern_models::*;
 use std::{

@@ -487,7 +487,10 @@ fn analyze_is_validated_and_refused_before_any_child_is_registered() {
     for rules in [
         String::new(),
         allow("fd"),
-        allow("fd") + "[[policy.rules]]\nid='d'\neffect='deny'\ncommand='tokei'\n",
+        format!(
+            "{}[[policy.rules]]\nid='d'\neffect='deny'\ncommand='tokei'\n",
+            allow("fd")
+        ),
     ] {
         let refused = config(&dir, &format!("{rules}{execution}"));
         let (code, json) = cli(&dir, &refused, None, &["fs", "analyze", "w"]);
