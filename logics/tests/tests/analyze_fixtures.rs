@@ -388,6 +388,67 @@ fn three_finished_children_are_published_once_and_reread_without_the_backend() {
 }
 
 #[test]
+fn unaggregated_children_are_protected_from_ttl_and_capacity_eviction_until_the_parent_publishes() {
+    let f = Fixture::new();
+    let parent = f.start(&f.root);
+    f.produce(
+        &parent,
+        AnalysisSection::Manifests,
+        &fake(&f.bin, "fd-find", r"printf 'Cargo.toml\0'"),
+    );
+    f.produce(
+        &parent,
+        AnalysisSection::Languages,
+        &fake(&f.bin, "tokei", &tokei_fixture()),
+    );
+    let available = |settings: &Results| {
+        parent.children[..2]
+            .iter()
+            .map(|id| results::inspect(&f.store, settings, id).unwrap().unwrap())
+            .all(|m| m.availability == "available")
+    };
+    // The third child is still pending. With no retention and no capacity left, neither the
+    // TTL nor eviction may drop the two finished inputs of the unpublished parent.
+    let expired = Results {
+        retention_seconds: 0,
+        ..Results::default()
+    };
+    let full = Results {
+        capacity_bytes: 1,
+        ..Results::default()
+    };
+    assert!(available(&expired));
+    assert!(available(&full));
+    // Registration that needs room reports storage_full instead of evicting protected data.
+    let plan = f.prepare(&f.root).children[0].1.plan.clone();
+    let refused = f
+        .store
+        .register_intent(
+            &ExecutionStore::allocate_id().unwrap(),
+            &plan,
+            || results::preflight_registration_locked(&f.store, &full, &plan),
+            |_| panic!("registration must be refused before reaching the backend"),
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StorageFull);
+    assert!(available(&full));
+
+    f.produce(
+        &parent,
+        AnalysisSection::Tree,
+        &fake(&f.bin, "fd-list", r"printf 'Cargo.toml\0'"),
+    );
+    let Materialized::Ready(_) = f.materialize(&parent, &never) else {
+        panic!("all children finished");
+    };
+    // Once the aggregate is published the children are ordinary results again.
+    let child = results::inspect(&f.store, &expired, &parent.children[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(child.availability, "expired");
+}
+
+#[test]
 fn a_failed_child_gives_a_partial_result_with_its_error() {
     let f = Fixture::new();
     let parent = f.start(&f.root);

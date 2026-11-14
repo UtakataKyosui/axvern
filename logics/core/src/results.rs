@@ -203,11 +203,32 @@ fn clamp_budget(wanted: u64, free: u64) -> Option<u64> {
     // verus-sync: end clamp_budget
 }
 
+/// Children of a logical parent whose aggregate result is not yet published. Their results are
+/// the only copy of the parent's input, so neither the TTL nor capacity eviction may drop them;
+/// when that leaves too little room the caller reports `storage_full` instead.
+fn unaggregated_children(
+    store: &ExecutionStore,
+    entries: &[Manifest],
+) -> Result<std::collections::HashSet<String>, Error> {
+    let mut protected = std::collections::HashSet::new();
+    for parent in crate::parents::history_locked(store)? {
+        let aggregated = entries
+            .iter()
+            .any(|m| m.execution_id == parent.execution_id && m.finished_at.is_some());
+        if !aggregated {
+            protected.extend(parent.children.iter().map(ToString::to_string));
+        }
+    }
+    Ok(protected)
+}
+
 fn maintain(store: &ExecutionStore, settings: &Results, needed: u64) -> Result<u64, Error> {
     let dir = directory(store)?;
     let mut entries = manifests(&dir)?;
+    let protected = unaggregated_children(store, &entries)?;
     for m in &mut entries {
         if m.availability == "available"
+            && !protected.contains(&m.execution_id.to_string())
             && m.finished_at
                 .is_some_and(|t| now().saturating_sub(t) >= settings.retention_seconds)
         {
@@ -226,7 +247,9 @@ fn maintain(store: &ExecutionStore, settings: &Results, needed: u64) -> Result<u
         .map(|m| m.reserved_bytes)
         .sum();
     let mut used = usage(&store.root)?.saturating_add(reserved);
-    for m in entries.iter_mut().filter(|m| m.availability == "available") {
+    for m in entries.iter_mut().filter(|m| {
+        m.availability == "available" && !protected.contains(&m.execution_id.to_string())
+    }) {
         if used.saturating_add(needed) <= settings.capacity_bytes {
             break;
         }
