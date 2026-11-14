@@ -567,6 +567,25 @@ fn approve() -> Approval {
         Approval::Rejected
     }
 }
+/// Policy evaluation through approval collection: the single place that decides whether to
+/// prompt. Denials and invalid input fail here; the prompt never carries command arguments.
+fn collect_approval(
+    config: &axvern_core::config::Config,
+    planned: &Planned,
+    interactive: bool,
+) -> Result<Approval, Error> {
+    let decision = planner::evaluate(config, planned)?;
+    Ok(if decision.effect == PolicyEffect::Ask && interactive {
+        approve()
+    } else {
+        Approval::NotProvided
+    })
+}
+/// The executable Pueue launches in place of the target.
+fn runner_path() -> Result<PathBuf, Error> {
+    std::env::current_exe()
+        .map_err(|_| Error::new(ErrorCode::BackendFailure, "cannot locate internal runner"))
+}
 fn execute(input: &Input) -> (Response<Value>, i32) {
     let config = services::load_config(input.config.as_deref());
     if input.command == "doctor" {
@@ -630,7 +649,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
         if let Err(e) = planner::evaluate(&config, &planned) {
             return failure(e);
         }
-        let mut service = match ExecutionService::new(config.clone()) {
+        let service = match ExecutionService::new(config.clone()) {
             Ok(s) => s,
             Err(e) => return failure(e),
         };
@@ -639,54 +658,22 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
             .as_deref()
             .expect("a replay always carries its request id");
         let interactive = io::stdin().is_terminal() && io::stderr().is_terminal();
-        let check_adapter = service.adapter.clone();
-        let runner = match std::env::current_exe() {
+        let runner = match runner_path() {
             Ok(p) => p,
-            Err(_) => {
-                return failure(Error::new(
-                    ErrorCode::BackendFailure,
-                    "cannot locate internal runner",
-                ));
-            }
+            Err(e) => return failure(e),
         };
-        let worker_store = services::store_path(&config).expect("validated store");
-        let settings = config.results.clone();
         // Ask the user before the store lock is taken: a pending prompt must not stall
         // other clients or workers. A replay or conflicting input never prompts.
-        let mut approval = Approval::NotProvided;
-        match service.store.request(key, &p) {
-            Ok(Some(_)) => (),
-            Ok(None) => {
-                let decision = match planner::evaluate(&config, &planned) {
-                    Ok(d) => d,
-                    Err(e) => return failure(e),
-                };
-                if decision.effect == PolicyEffect::Ask && interactive {
-                    approval = approve();
-                }
-            }
+        let approval = match service.store.request(key, &p) {
+            Ok(Some(_)) => Approval::NotProvided,
+            Ok(None) => match collect_approval(&config, &planned, interactive) {
+                Ok(a) => a,
+                Err(e) => return failure(e),
+            },
             Err(e) => return failure(e),
-        }
-        let executable = &planned.executable;
-        let registration = service.store.register_request_rewritten(
-            key,
-            &p,
-            planned.record().cloned(),
-            || {
-                planner::authorize(&config, &planned, interactive, approval)?;
-                axvern_core::results::preflight_registration_locked(
-                    &service.store,
-                    &settings,
-                    executable,
-                )?;
-                check_adapter.check()
-            },
-            |id| {
-                let worker =
-                    services::worker_plan(&runner, &worker_store, &settings, executable, id, None)?;
-                service.adapter.register_with_label(&worker, id)
-            },
-        );
+        };
+        let registration =
+            service.run_planned_request(&runner, key, &planned, interactive, approval);
         return match registration {
             Ok(request) if request.record.is_some() => {
                 let (response, code) = run_response(
@@ -732,13 +719,10 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                 Err(e) => return failure(e),
             }
         };
-        let decision = match planner::evaluate(&config, &p) {
-            Ok(d) => d,
+        approval = match collect_approval(&config, &p, interactive) {
+            Ok(a) => a,
             Err(e) => return failure(e),
         };
-        if decision.effect == PolicyEffect::Ask && interactive {
-            approval = approve();
-        }
         if let Err(e) = planner::authorize(&config, &p, interactive, approval) {
             return failure(e);
         }
@@ -752,7 +736,7 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
     } else {
         None
     };
-    let mut service = match ExecutionService::new(config.clone()) {
+    let service = match ExecutionService::new(config.clone()) {
         Ok(s) => s,
         Err(e) => return failure(e),
     };
@@ -780,9 +764,9 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
         "run" | "fs list" | "fs find" | "fs search" | "fs read" | "code search" | "code stats"
         | "system disk-usage" | "code diff" | "system processes" => {
             let p = run_plan.as_ref().expect("run plan");
-            match std::env::current_exe()
-                .map_err(|_| axvern_core::store::RegistrationFailure {
-                    error: Error::new(ErrorCode::BackendFailure, "cannot locate internal runner"),
+            match runner_path()
+                .map_err(|error| axvern_core::store::RegistrationFailure {
+                    error,
                     receipt: None,
                     execution_id: None,
                 })
@@ -1082,18 +1066,13 @@ fn analyze(input: &Input, config: axvern_core::config::Config) -> (Response<Valu
     if let Err(e) = analyze::preflight(&config, &prepared, interactive, approval) {
         return failure(e);
     }
-    let mut service = match ExecutionService::new(config) {
+    let service = match ExecutionService::new(config) {
         Ok(s) => s,
         Err(e) => return failure(e),
     };
-    let runner = match std::env::current_exe() {
+    let runner = match runner_path() {
         Ok(p) => p,
-        Err(_) => {
-            return failure(Error::new(
-                ErrorCode::BackendFailure,
-                "cannot locate internal runner",
-            ));
-        }
+        Err(e) => return failure(e),
     };
     let store = service.store.clone();
     let registration = analyze::register(&store, &prepared, |child| {

@@ -4,6 +4,7 @@ use crate::{
     config::{Config, UserPaths},
     planner::{self, Planned},
     policy,
+    store::RequestReservation,
     store::{ExecutionStore, RegistrationFailure},
 };
 use axvern_models::*;
@@ -167,33 +168,8 @@ impl ExecutionService {
             job,
         )
     }
-    pub fn run_captured(
-        &mut self,
-        runner: &Path,
-        plan: &ExecutionPlan,
-        interactive: bool,
-        approval: Approval,
-    ) -> Result<ExecutionRecord, crate::store::RegistrationFailure> {
-        self.run_planned(
-            runner,
-            &Planned::unchanged(plan.clone()),
-            interactive,
-            approval,
-        )
-    }
-    /// Registers `planned.executable` once; the request identity and audit record keep
-    /// `planned.original`.
-    pub fn run_planned(
-        &mut self,
-        runner: &Path,
-        planned: &Planned,
-        interactive: bool,
-        approval: Approval,
-    ) -> Result<ExecutionRecord, crate::store::RegistrationFailure> {
-        self.run_planned_job(runner, planned, None, interactive, approval)
-    }
     pub fn run_captured_job(
-        &mut self,
+        &self,
         runner: &Path,
         plan: &ExecutionPlan,
         job: Option<&DiscoveryJob>,
@@ -208,8 +184,53 @@ impl ExecutionService {
             approval,
         )
     }
+    /// Capacity and backend checks that every registration runs under the store lock.
+    fn preflight<'a>(
+        &'a self,
+        executable: &'a ExecutionPlan,
+    ) -> impl FnOnce() -> Result<(), Error> + 'a {
+        let adapter = self.adapter.clone();
+        move || {
+            crate::results::preflight_registration_locked(
+                &self.store,
+                &self.config.results,
+                executable,
+            )?;
+            adapter.check()
+        }
+    }
+    /// Idempotent registration for `run --request-id`. Policy is authorized under the store
+    /// lock with the approval the caller collected beforehand; a replay never needs one.
+    pub fn run_planned_request(
+        &self,
+        runner: &Path,
+        key: &str,
+        planned: &Planned,
+        interactive: bool,
+        approval: Approval,
+    ) -> Result<RequestReservation, Error> {
+        let preflight = self.preflight(&planned.executable);
+        let mut registrar = self.adapter.clone();
+        self.store.register_request_rewritten(
+            key,
+            &planned.original,
+            planned.record().cloned(),
+            || {
+                planner::authorize(&self.config, planned, interactive, approval)?;
+                preflight()
+            },
+            |id| {
+                let worker = self.worker_plan(runner, &planned.executable, id, None)?;
+                registrar.register_with_label(&worker, id)
+            },
+        )
+    }
+    /// Whether `planned` would need an interactive approval before registration.
+    pub fn needs_approval(&self, planned: &Planned) -> Result<bool, Error> {
+        Ok(planner::evaluate(&self.config, planned)?.effect == PolicyEffect::Ask)
+    }
     pub fn run_planned_job(
-        &mut self,
+        &self,
         runner: &Path,
         planned: &Planned,
         job: Option<&DiscoveryJob>,
@@ -226,20 +247,13 @@ impl ExecutionService {
         let worker = self
             .worker_plan(runner, &planned.executable, &id, job)
             .map_err(fail)?;
-        let check_adapter = self.adapter.clone();
+        let mut registrar = self.adapter.clone();
         let registration = self.store.register_intent_rewritten(
             &id,
             &planned.original,
             planned.record().cloned(),
-            || {
-                crate::results::preflight_registration_locked(
-                    &self.store,
-                    &self.config.results,
-                    &planned.executable,
-                )?;
-                check_adapter.check()
-            },
-            |id| self.adapter.register_with_label(&worker, id),
+            self.preflight(&planned.executable),
+            |id| registrar.register_with_label(&worker, id),
         );
         match registration {
             Ok(request) => request
@@ -335,13 +349,13 @@ impl ExecutionService {
     /// Same capture, capacity reservation and replay path as the CLI. `runner` is the
     /// internal worker executable that Pueue launches in place of the target.
     pub fn run(
-        &mut self,
+        &self,
         runner: &Path,
         plan: &ExecutionPlan,
         interactive: bool,
         approval: Approval,
     ) -> Result<ExecutionRecord, RegistrationFailure> {
-        self.run_captured(runner, plan, interactive, approval)
+        self.run_captured_job(runner, plan, None, interactive, approval)
     }
     pub fn status(&self, id: &ExecutionId) -> Result<ExecutionView, Error> {
         let record = self.store.find_record(id)?;
