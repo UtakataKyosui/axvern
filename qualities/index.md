@@ -141,3 +141,35 @@ The [modern CLI compatibility contract](evidence/17-modern-cli.md) maps each
 adapter and boundary to executable coverage. CI measures optional eza 0.23.5 in
 a separate display-only spike after the required gate has run without it;
 `AXVERN_REQUIRE_EZA_SPIKE=1` prevents that dedicated step from silently skipping.
+
+## blaze（ローカルの任意ツール）
+
+[blaze](https://github.com/indexable-inc/blaze) は常駐デーモンで増分ビルドするcargo互換のビルダー。
+**必須ゲート・CI・`verify` には含めない。** blaze自身が「cargoとCIが最終判断」としており、
+独自のnightly（`blaze-2026-10-27`）でビルドし、`fmt` / `clippy` / `doc` は持たない。
+
+導入（任意）: `curl -fsSL https://ix.dev/blaze | sh -s -- --version 0.20261027.0`。
+`~/.cargo/bin` と `~/.blaze` に書き込み、チェックサムを検証し、初回ビルドで独自のRust（約123MB）を取得する。
+ドキュメントにある `cargo install blaze-engine` は、crates.ioに該当crateが無く使えない（2026-11-14時点）。
+`BLAZE_HOME` はUnixソケットのパス長（SUN_LEN）制限のため短いパスにする。
+
+`moon run qualities:blaze-spike`（または `python3 qualities/scripts/blaze_spike.py`）が、
+作業ツリーの複製だけを編集して cargo と blaze を比較し、`target/blaze-spike.json` に記録する。
+未導入なら何もせず終了する。`AXVERN_BLAZE` でバイナリを指定できる。
+
+実測（macOS arm64、blaze 0.20261027.0、cargo 1.99.1、各5回の中央値）:
+
+| 項目 | cargo | blaze |
+| --- | --- | --- |
+| 初回 `build`（依存取得済み） | 5.3 s | 7.1 s |
+| 1行編集後の `build` | 0.28 s | 0.15 s |
+| 編集の反映（`--version` 出力で確認） | 全回反映 | 全回反映 |
+| `axvern-core` の単体テスト | 10件 | 10件 |
+
+- この規模では差は0.1秒台で、体感の利点は小さい。初回はcargoより遅い。
+- 統合テスト（`axvern-tests --test cli`）は、デーモンが他crateのテストを未実行の状態では
+  `reaches functions blaze could not compile`（`__RUST_STD_INTERNAL_VAL`）で失敗し、
+  先に `axvern-core` のテストを走らせた後は14件通る。実行順で結果が変わるため、
+  受入判定（`qualities:test`、nextest、Mojo契約）をblazeに置き換えない。
+- デーモンは数GBのメモリを保持する。使い終わったら `blaze stop`。
+
