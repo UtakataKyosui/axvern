@@ -241,6 +241,43 @@ fn text(t: &str) -> serde_json::Value {
 }
 
 #[test]
+fn search_plans_choose_literal_case_context_and_a_fixed_scan_depth() {
+    let plan = |edit: &dyn Fn(&mut SearchJob)| {
+        let DiscoveryJob::Search(mut job) = search_job("/r", 10) else {
+            unreachable!()
+        };
+        edit(&mut job);
+        args(&tools::adapter(&DiscoveryJob::Search(job)).plan().unwrap())
+    };
+    let base = plan(&|_| {});
+    assert!(base.contains(&"--case-sensitive".to_owned()));
+    assert!(!base.contains(&"--fixed-strings".to_owned()));
+    assert!(base.windows(2).any(|w| w == ["--max-depth", "32"]));
+    assert!(base.windows(2).any(|w| w == ["--glob", "!.git"]));
+    assert!(base.contains(&"--no-mmap".to_owned()) && base.contains(&"--binary".to_owned()));
+    assert!(base.contains(&"--no-config".to_owned()));
+    assert!(base.windows(2).any(|w| w == ["--context", "1"]));
+    assert_eq!(&base[base.len() - 4..], ["--regexp", "TODO", "--", "."]);
+
+    let literal = plan(&|j| {
+        j.fixed_strings = true;
+        j.ignore_case = true;
+        j.context = 0;
+        j.file = Some("-odd name.rs".into());
+        j.pattern = "a.*b(".into();
+    });
+    assert!(literal.contains(&"--fixed-strings".to_owned()));
+    assert!(literal.contains(&"--ignore-case".to_owned()));
+    assert!(!literal.contains(&"--case-sensitive".to_owned()));
+    // Without context the option is omitted entirely.
+    assert!(!literal.contains(&"--context".to_owned()));
+    assert_eq!(
+        &literal[literal.len() - 4..],
+        ["--regexp", "a.*b(", "--", "-odd name.rs"]
+    );
+}
+
+#[test]
 fn rg_json_becomes_sorted_items_with_ranges_and_context() {
     let mut out = Vec::new();
     // Files arrive in arbitrary order; contexts are attached from neighbouring events.
