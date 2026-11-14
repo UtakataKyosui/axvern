@@ -150,7 +150,7 @@ pub(crate) fn history_until(
     let _lock = store.lock_until(deadline)?;
     history_locked(store)
 }
-fn history_locked(store: &ExecutionStore) -> Result<Vec<ParentRecord>, Error> {
+pub(crate) fn history_locked(store: &ExecutionStore) -> Result<Vec<ParentRecord>, Error> {
     let mut records = vec![];
     for entry in fs::read_dir(&store.root).map_err(|_| failure())? {
         let path = entry.map_err(|_| failure())?.path();
