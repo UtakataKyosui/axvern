@@ -346,6 +346,41 @@ fn supported_languages_and_extensions_are_checked() {
 }
 
 #[test]
+fn every_supported_language_selects_its_own_rules_and_extensions() {
+    let cases = [
+        ("rust", "source_file", ["rs"].as_slice()),
+        (
+            "javascript",
+            "program",
+            ["js", "jsx", "mjs", "cjs"].as_slice(),
+        ),
+        ("typescript", "program", ["ts", "cts", "mts"].as_slice()),
+        ("python", "module", ["py", "pyi"].as_slice()),
+        ("go", "source_file", ["go"].as_slice()),
+    ];
+    for (lang, root_kind, extensions) in cases {
+        let DiscoveryJob::CodeSearch(mut job) = search_job("x", 1) else {
+            unreachable!()
+        };
+        job.lang = lang.into();
+        let argv = args(&DiscoveryJob::CodeSearch(job));
+        let rules = &argv[argv.iter().position(|a| a == "--inline-rules").unwrap() + 1];
+        let documents: Vec<Value> = rules
+            .split("\n---\n")
+            .map(|d| serde_json::from_str(d).unwrap())
+            .collect();
+        assert!(documents.iter().all(|d| d["language"] == lang), "{lang}");
+        assert_eq!(documents[2]["rule"], json!({"kind": root_kind}), "{lang}");
+        let language = ast_grep::language(lang).unwrap();
+        for ext in extensions {
+            assert!(language.owns(&format!("dir/file.{ext}")), "{lang}.{ext}");
+        }
+        // A file with no extension or another language's extension is never claimed.
+        assert!(!language.owns("Makefile") && !language.owns("file.txt"));
+    }
+}
+
+#[test]
 fn files_without_matches_count_toward_the_entry_limit() {
     let DiscoveryJob::CodeSearch(mut job) = search_job("x", 10) else {
         unreachable!()
