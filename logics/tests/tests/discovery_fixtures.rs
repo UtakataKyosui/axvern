@@ -112,6 +112,82 @@ fn plans_are_plain_argv_with_pagers_and_color_disabled() {
     assert_eq!(&a[a.len() - 2..], ["--", "/r/-weird file.txt"]);
 }
 
+fn find_job(
+    pattern: &str,
+    syntax: PatternSyntax,
+    full_path: bool,
+    ignore_case: bool,
+) -> DiscoveryJob {
+    DiscoveryJob::Find(FindJob {
+        root: "/r".into(),
+        in_repo: true,
+        pattern: pattern.into(),
+        syntax,
+        full_path,
+        extensions: vec!["rs".into(), "toml".into()],
+        entry_type: EntryFilter::File,
+        depth: 3,
+        include_ignored: false,
+        ignore_case,
+        limits: limits(100, 1000),
+    })
+}
+
+#[test]
+fn find_plans_combine_syntax_extensions_type_case_and_depth_as_plain_argv() {
+    let hostile = "$(touch x) --config `id`\n";
+    let regex = tools::adapter(&find_job(hostile, PatternSyntax::Regex, false, false))
+        .plan()
+        .unwrap();
+    assert_eq!(regex.program, "fd");
+    let a = args(&regex);
+    assert!(!a.contains(&"--glob".to_owned()));
+    assert!(a.contains(&"--case-sensitive".to_owned()));
+    // Several extensions are alternatives, each as its own option pair.
+    assert!(a.windows(2).any(|w| w == ["--extension", "rs"]));
+    assert!(a.windows(2).any(|w| w == ["--extension", "toml"]));
+    assert!(a.windows(2).any(|w| w == ["--type", "f"]));
+    assert!(a.windows(2).any(|w| w == ["--max-depth", "3"]));
+    // The pattern is the last element and follows `--`, so it cannot be read as an option.
+    assert_eq!(&a[a.len() - 2..], ["--", hostile]);
+
+    let glob = args(
+        &tools::adapter(&find_job("*.rs", PatternSyntax::Glob, false, true))
+            .plan()
+            .unwrap(),
+    );
+    assert!(glob.contains(&"--glob".to_owned()));
+    assert!(
+        glob.contains(&"--ignore-case".to_owned())
+            && !glob.contains(&"--case-sensitive".to_owned())
+    );
+
+    // Full-path matching is done by the normalizer, so fd lists everything.
+    let full = args(
+        &tools::adapter(&find_job("src/**/*.rs", PatternSyntax::Glob, true, false))
+            .plan()
+            .unwrap(),
+    );
+    assert!(!full.contains(&"--glob".to_owned()));
+    assert_eq!(&full[full.len() - 2..], ["--", "^"]);
+
+    for (entry_type, flag) in [
+        (EntryFilter::Directory, Some("d")),
+        (EntryFilter::Symlink, Some("l")),
+        (EntryFilter::Any, None),
+    ] {
+        let DiscoveryJob::Find(mut job) = find_job("x", PatternSyntax::Regex, false, false) else {
+            unreachable!()
+        };
+        job.entry_type = entry_type;
+        let a = args(&tools::adapter(&DiscoveryJob::Find(job)).plan().unwrap());
+        match flag {
+            Some(flag) => assert!(a.windows(2).any(|w| w == ["--type", flag])),
+            None => assert!(!a.contains(&"--type".to_owned())),
+        }
+    }
+}
+
 #[test]
 fn fd_records_are_sorted_typed_and_non_utf8_names_are_reported_by_parent() {
     let temp = tempfile::tempdir().unwrap();
