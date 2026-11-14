@@ -9,6 +9,8 @@ tasks:
     deps: [qualities:agent-hook-test]
   agent-hook-test:
     command: python3 qualities/scripts/test_agent_hook.py
+  verus-test:
+    command: python3 qualities/scripts/test_verus_check.py
   project-check:
     command: python3 qualities/scripts/project_gate.py check
   project-hooks:
@@ -30,6 +32,8 @@ tasks:
     command: python3 qualities/scripts/pueue_spike.py --record target/pueue-spike.json
   links:
     command: python3 qualities/scripts/check_links.py
+  verus:
+    command: python3 qualities/scripts/verus_check.py
   release-smoke:
     command: python3 qualities/scripts/release_smoke.py
   verify:

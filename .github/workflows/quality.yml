@@ -23,6 +23,7 @@ jobs:
       rust: ${{ steps.plan.outputs.rust }}
       site: ${{ steps.plan.outputs.site }}
       links: ${{ steps.plan.outputs.links }}
+      verus: ${{ steps.plan.outputs.verus }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +34,7 @@ jobs:
           python3 qualities/scripts/test_discovery_tools.py
           python3 qualities/scripts/test_project_gate.py
           python3 qualities/scripts/test_agent_hook.py
+          python3 qualities/scripts/test_verus_check.py
           python3 qualities/scripts/ci_plan.py
 
   fmt:
@@ -246,9 +248,42 @@ jobs:
             python3 qualities/scripts/check_links.py
           fi
 
+  verus:
+    needs: changes
+    if: needs.changes.outputs.verus == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERUS_RELEASE: 0.2026.11.02.8bf68ee
+      VERUS_SHA256: f3a0119292df8855e4435da8130bee1873b0e6a60c306accf81a08ea687bba3c
+      # Must match the toolchain recorded in the release's version.json.
+      VERUS_TOOLCHAIN: 1.99.1
+    steps:
+      - uses: actions/checkout@v4
+      - id: verus
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/verus
+          key: verus-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.VERUS_RELEASE }}
+      - name: Install pinned Verus release
+        if: steps.verus.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/verus.zip" "https://github.com/verus-lang/verus/releases/download/release/${VERUS_RELEASE}/verus-${VERUS_RELEASE}-x86-linux.zip"
+          echo "${VERUS_SHA256}  $RUNNER_TEMP/verus.zip" | sha256sum --check -
+          unzip -q "$RUNNER_TEMP/verus.zip" -d "$RUNNER_TEMP/verus-unpack"
+          mv "$RUNNER_TEMP/verus-unpack/verus-x86-linux" "$RUNNER_TEMP/verus"
+      - run: rustup toolchain install "$VERUS_TOOLCHAIN" --profile minimal
+      - name: Prove
+        env:
+          AXVERN_REQUIRE_VERUS: '1'
+        run: |
+          export AXVERN_VERUS="$RUNNER_TEMP/verus/verus"
+          "$AXVERN_VERUS" --version
+          python3 qualities/scripts/verus_check.py
+
   # Single stable check for branch protection; skipped groups count as passing.
   quality:
-    needs: [changes, fmt, rust, site, links]
+    needs: [changes, fmt, rust, site, links, verus]
     # Superseded runs must not publish a failing aggregate after cancellation.
     # Failed dependencies still reach this job and fail the result check below.
     if: ${{ !cancelled() }}
