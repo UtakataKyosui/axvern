@@ -122,6 +122,42 @@ mainの実行はキャッシュを更新するためキャンセルしない。
 キャッシュは7日間アクセスがないと消えるため、mainで週2回（日・水 18:00 UTC）定期実行する。
 定期実行には差分の基準がないため全チェックを実行する。
 
+## relax（ローカルの任意ツール）
+
+[relax](https://github.com/makepad/relax) はrustc・LLVM・リンカを使わずにCargoパッケージを実行・テストするJIT。
+作者自身が「開発の反復用で実験的。リリースはrustcでビルドする」としている。
+**必須ゲート・CI・`verify` には含めない。** `cargo clippy` / `fmt` の代わりにもならない。
+
+導入（任意）: 固定commitを作業ツリーの外にcloneしてビルドし、cloneは動かさない
+（relaxはstdをビルドしたcheckoutから読む）。
+
+```sh
+git clone https://github.com/makepad/relax ~/.relax-checkout
+git -C ~/.relax-checkout checkout 436868926ffae73495a4b1eab8382024368d6663
+cargo build --release --manifest-path ~/.relax-checkout/Cargo.toml -p relax-runner --bin relax
+export AXVERN_RELAX=~/.relax-checkout/target/release/relax
+```
+
+使い方: パスではなく**パッケージ名**を渡す。`relax test axvern-core`、`relax check axvern-cli`、
+`relax test --live axvern-core`（保存で再テスト）。`--workspace` は未対応。キャッシュは `target/relax`（`relax clean` で削除）。
+
+`moon run qualities:relax-spike`（または `python3 qualities/scripts/relax_spike.py`）が、
+作業ツリーの複製だけを編集して cargo と relax を比較し、`target/relax-spike.json` に記録する。
+各編集で追加したテストが両ツールで同数だけ増えること、統合テストの件数が一致することを検査する。
+未導入なら何もせず終了する。
+
+実測（macOS arm64、relax `4368689`、cargo 1.99.1、各5回の中央値）:
+
+| 項目 | cargo | relax |
+| --- | --- | --- |
+| `axvern-core` 初回テスト | 6.4 s | 7.1 s |
+| テスト追加後の再テスト | 1.25 s | 1.23 s |
+| `axvern-tests` 統合テスト（207件、`AXVERN_TEST_BIN` 指定） | 52 s（207件成功） | 62 s（207件成功） |
+
+- 件数と結果は一致した。一方、この規模のワークスペースでは速度の利点は出ない。
+- 依存が増え、再ビルドが長くなった場合に再評価する。
+- 本番コードの最適化結果はrustcより遅い（作者の測定で1.12〜1.24倍）。性能測定に使わない。
+
 ## v0.2 discovery acceptance
 
 CI installs the pinned fd/rg/bat/ast-grep/tokei toolchain and exports

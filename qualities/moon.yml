@@ -36,6 +36,8 @@ tasks:
     command: python3 qualities/scripts/verus_check.py
   blaze-spike:
     command: python3 qualities/scripts/blaze_spike.py
+  relax-spike:
+    command: python3 qualities/scripts/relax_spike.py
   release-smoke:
     command: python3 qualities/scripts/release_smoke.py
   verify:
