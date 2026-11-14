@@ -1,3 +1,4 @@
+#![warn(clippy::unwrap_used)]
 use axvern_core::{
     analyze, discovery, doctor,
     planner::{self, Planned},
@@ -217,7 +218,10 @@ fn parse(args: &[OsString]) -> Result<Input, Error> {
                         Some("core" | "discovery" | "logs" | "performance" | "all")
                     ) =>
                 {
-                    input.scope = value.to_str().unwrap().into()
+                    input.scope = value
+                        .to_str()
+                        .expect("scope was matched as UTF-8 above")
+                        .into()
                 }
                 "--depth" => {
                     input.depth = Some(u32::try_from(digits(value)?).map_err(|_| invalid())?)
@@ -630,7 +634,10 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
             Ok(s) => s,
             Err(e) => return failure(e),
         };
-        let key = input.request_id.as_deref().unwrap();
+        let key = input
+            .request_id
+            .as_deref()
+            .expect("a replay always carries its request id");
         let interactive = io::stdin().is_terminal() && io::stderr().is_terminal();
         let check_adapter = service.adapter.clone();
         let runner = match std::env::current_exe() {
@@ -682,7 +689,11 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
         );
         return match registration {
             Ok(request) if request.record.is_some() => {
-                let (response, code) = run_response(&service, request.record.unwrap(), input.wait);
+                let (response, code) = run_response(
+                    &service,
+                    request.record.expect("guard checked the record is present"),
+                    input.wait,
+                );
                 (with_rewrite(response, &planned.rewrite), code)
             }
             Ok(request) => unknown_request(request.execution_id),
@@ -881,7 +892,10 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                         let mut value = serde_json::to_value(v).expect("view JSON");
                         // Rewrite records retain original and rewritten argv privately;
                         // history lists execution metadata, not command arguments.
-                        value["record"].as_object_mut().unwrap().remove("rewrite");
+                        value["record"]
+                            .as_object_mut()
+                            .expect("view record serializes as an object")
+                            .remove("rewrite");
                         value["result_availability"] = json!(a);
                         value["command"] = json!("run");
                         Ok(value)
@@ -925,7 +939,9 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                             let state = match analyze::observe_with_tasks(
                                 &service,
                                 &parent,
-                                tasks.as_ref().unwrap(),
+                                tasks
+                                    .as_ref()
+                                    .expect("tasks are listed whenever a parent exists"),
                             ) {
                                 Ok(state) => state,
                                 Err(e) => return failure(e),
@@ -940,7 +956,9 @@ fn execute(input: &Input) -> (Response<Value>, i32) {
                         let view = match axvern_core::parents::inspect_with_tasks(
                             &service,
                             &parent,
-                            tasks.as_ref().unwrap(),
+                            tasks
+                                .as_ref()
+                                .expect("tasks are listed whenever a parent exists"),
                         ) {
                             Ok(v) => v,
                             Err(e) => return failure(e),
@@ -1344,7 +1362,10 @@ fn result_response(
                         response.state = v.task.as_ref().map(|t| t.state.into());
                         response.exit_code = v.task.as_ref().and_then(|t| t.exit_code);
                         if matches!(response.state, Some(TaskState::Queued | TaskState::Running)) {
-                            response.output.as_mut().unwrap()["result_availability"] =
+                            response
+                                .output
+                                .as_mut()
+                                .expect("success responses carry output")["result_availability"] =
                                 json!("pending");
                         } else {
                             response.error = Some(Error::new(
@@ -1388,7 +1409,11 @@ fn run_response(
         Ok(Some(m)) if m.finished_at.is_some() => return (saved_run_response(service, &record), 0),
         Err(error) => {
             response.error = Some(error);
-            response.output.as_mut().unwrap()["result_availability"] = json!("unavailable");
+            response
+                .output
+                .as_mut()
+                .expect("success responses carry output")["result_availability"] =
+                json!("unavailable");
             return (response, 0);
         }
         _ => (),
@@ -1593,7 +1618,10 @@ fn human(response: &Response<Value>) {
             if let Some(state) = response.state {
                 println!(
                     "state: {}",
-                    serde_json::to_value(state).unwrap().as_str().unwrap()
+                    serde_json::to_value(state)
+                        .expect("task state JSON")
+                        .as_str()
+                        .expect("task state serializes as a string")
                 );
             }
             if let Some(code) = response.exit_code {
@@ -1729,7 +1757,7 @@ fn human(response: &Response<Value>) {
         let code = serde_json::to_value(error.code).expect("error code JSON");
         println!(
             "error: {}: {}",
-            code.as_str().unwrap(),
+            code.as_str().expect("error code serializes as a string"),
             visible(&error.message)
         );
     }

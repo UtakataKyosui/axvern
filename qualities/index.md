@@ -55,6 +55,22 @@ Probes hold non-TTY stdin open to detect prompt hangs, use private config/cwd, t
 - `release-smoke`: release build, install into a temporary root, executable name/version/help checks; writes `target/release-evidence.json`.
 - CI records its console transcript in `target/quality.log` and uploads evidence on both Ubuntu and macOS. No publishing step exists.
 
+## Rust品質ルール（BeautifulRust）
+
+[morganlinton/BeautifulRust](https://github.com/morganlinton/BeautifulRust)
+（MIT、commit `b9718436d77ee7bcf17cdcb6aa27628feb95d97a`）を2か所で採用する。
+
+- Skill: `rust-best-practices` / `rust-review` / `rust-port` を `.agents/skills/` に取り込み、
+  Claude Code用に `.claude/skills/` からsymlinkする。`evals/` は含めない。
+  ライセンスは `.agents/skills/BEAUTIFUL_RUST_LICENSE`。更新は上流の該当commitと差分を確認して手で行う。
+- Lint: ルートの `[workspace.lints]` と `clippy.toml`。CIの `qualities:clippy`（`-D warnings`）が強制する。
+  `unwrap_used` は本番crateのルート属性で有効化し、`logics/tests` には適用しない。
+
+上流の表のうち、既存コードに多数の指摘が出る `pedantic` グループ、`as_conversions`、
+`cast_*`、`fn_params_excessive_bools`、`wildcard_imports`、`missing_*_doc` は未採用。
+有効化する場合は対象lintごとに指摘を解消してからworkspaceへ追加する。
+`unsafe_code = "forbid"` のため unsafe 関連lintは実質検査対象がない。
+
 ## CIの実行範囲とキャッシュ
 
 PRはそのPRのベースからの差分、mainへのpushは直前のコミットからの差分で判定する。

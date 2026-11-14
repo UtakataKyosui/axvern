@@ -39,8 +39,8 @@ fn simultaneous_request_replay_conflict_and_unknown_never_register_twice() {
     let store = Arc::new(store);
     let threads: Vec<_> = (0..8)
         .map(|_| {
-            let s = store.clone();
-            let calls = calls.clone();
+            let s = Arc::clone(&store);
+            let calls = Arc::clone(&calls);
             std::thread::spawn(move || {
                 s.register_request(
                     &"a".repeat(128),
@@ -406,7 +406,7 @@ fn parent_save_recovers_its_own_abandoned_scratch_and_refuses_unsafe_scratch() {
     );
     let other = ParentRecord {
         execution_id: ExecutionStore::allocate_id().unwrap(),
-        ..parent.clone()
+        ..parent
     };
     let unsafe_scratch = root.join(format!("{}.parent-scratch", other.execution_id));
     fs::write(&unsafe_scratch, b"partial").unwrap();
@@ -442,8 +442,11 @@ fn concurrent_registrations_without_request_id_share_one_capacity_reservation() 
     let registered = Arc::new(AtomicUsize::new(0));
     let threads: Vec<_> = (0..8)
         .map(|_| {
-            let (store, settings, registered) =
-                (store.clone(), settings.clone(), registered.clone());
+            let (store, settings, registered) = (
+                Arc::clone(&store),
+                Arc::clone(&settings),
+                Arc::clone(&registered),
+            );
             std::thread::spawn(move || {
                 store.register_intent(
                     &ExecutionStore::allocate_id().unwrap(),
@@ -484,7 +487,7 @@ fn doctor_deadline_bounds_waiting_for_another_clients_store_lock() {
     let held = fs::File::open(store_path.join("store.lock")).unwrap();
     held.lock().unwrap();
     let (sender, receiver) = std::sync::mpsc::channel();
-    let cwd = root.clone();
+    let cwd = root;
     std::thread::spawn(move || {
         let started = Instant::now();
         let report = axvern_core::doctor::diagnose_scope_with_timeout(

@@ -132,6 +132,10 @@ pub struct ListJob {
     pub include_ignored: bool,
     pub limits: DiscoveryLimits,
 }
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent, serialized job option"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindJob {
     pub root: String,
@@ -147,6 +151,10 @@ pub struct FindJob {
     pub limits: DiscoveryLimits,
 }
 /// `file` is the basename inside `root` when the searched path is a single file.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent, serialized job option"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchJob {
     pub root: String,

@@ -82,7 +82,7 @@ pub fn prepare(
             ignore_case: false,
         })?;
         let tree = child(DiscoveryRequest::List {
-            path: Some(target.clone()),
+            path: Some(target),
             depth: tree_depth,
             include_ignored,
         })?;
@@ -599,7 +599,7 @@ fn missing(code: ErrorCode, message: &str) -> SectionOutcome {
     }
 }
 fn read_section(
-    d: &Derivation,
+    d: &Derivation<'_>,
     registration: &SectionRegistration,
     backend: &dyn Fn(&ExecutionId) -> Result<ChildState, Error>,
 ) -> Result<SectionOutcome, Error> {
