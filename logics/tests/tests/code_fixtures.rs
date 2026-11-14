@@ -552,6 +552,36 @@ fn stats_failures_and_limits_are_never_presented_as_complete() {
 }
 
 #[test]
+fn skipped_files_is_never_invented_for_partial_limited_or_interrupted_stats() {
+    let stream = fixture("tokei-stream.jsonl");
+    let denied_stderr =
+        b"[2026-10-15T23:49:34Z ERROR tokei::utils::fs] Permission denied (os error 13) reading ./sub\n";
+    let timeout = TargetExit {
+        code: Some(0),
+        stopped: Some(Stop::Truncated(TruncationReason::Timeout)),
+        ..Default::default()
+    };
+    let outcomes = [
+        run(&stats_job(2), &[&stream], ok(0), b""),
+        run(&stats_job(100), &[&stream], ok(0), denied_stderr),
+        run(&stats_job(100), &[&stream], timeout, b""),
+        run(&stats_job(100), &[], ok(1), b""),
+    ];
+    for (i, outcome) in outcomes.iter().enumerate() {
+        let DiscoverySummary::CodeStats {
+            skipped_files,
+            scope_complete,
+            ..
+        } = &outcome.document.summary
+        else {
+            panic!("case {i}")
+        };
+        assert_eq!(*skipped_files, None, "case {i}");
+        assert!(!scope_complete, "case {i}");
+    }
+}
+
+#[test]
 fn counts_saturate_and_reject_values_that_are_not_u64() {
     let big = |name: &str| {
         format!(
