@@ -529,6 +529,65 @@ fn bat_rejects_binary_and_non_utf8_and_flags_long_lines() {
 }
 
 #[test]
+fn bat_stops_on_body_and_artifact_limits_and_reports_a_missing_tool() {
+    // 70 lines of 16000 bytes exceed READ_BODY_BYTES (1 MiB) before the 70th is stored.
+    let line = format!("{}\n", "a".repeat(16_000));
+    let big = line.repeat(70);
+    let body = run(&read_job(1, 100), &[big.as_bytes()], ok(0), b"");
+    assert_eq!(body.state, ChildState::Done);
+    assert!(body.document.completeness.truncated);
+    assert_eq!(
+        body.document.completeness.truncation_reasons,
+        [TruncationReason::BodyBytes]
+    );
+    assert!(!eof(&body));
+    let stored: usize = body
+        .document
+        .items
+        .iter()
+        .map(|i| match i {
+            DiscoveryItem::Line(l) => l.text.len(),
+            _ => unreachable!(),
+        })
+        .sum();
+    assert!(!body.document.items.is_empty() && (stored as u64) <= READ_BODY_BYTES);
+
+    // A small artifact budget stops the read before the body limit is reached.
+    let mut normalizer = tools::adapter(&read_job(1, 100)).normalizer(200).unwrap();
+    let mut stopped = None;
+    for chunk in [&b"one\ntwo\nthree\nfour\nfive\n"[..]] {
+        if let Flow::Stop(stop) = normalizer.feed(chunk) {
+            stopped = Some(stop);
+        }
+    }
+    let small = normalizer.finish(
+        &TargetExit {
+            code: Some(0),
+            stopped,
+            ..Default::default()
+        },
+        b"",
+    );
+    assert_eq!(
+        small.document.completeness.truncation_reasons,
+        [TruncationReason::ArtifactBytes]
+    );
+    assert!(!eof(&small) && small.document.items.len() < 5);
+
+    let missing = run(
+        &read_job(1, 1),
+        &[],
+        TargetExit {
+            spawn_failed: true,
+            ..Default::default()
+        },
+        b"",
+    );
+    assert_eq!(missing.state, ChildState::Failed);
+    assert_eq!(missing.document.errors[0].code, ErrorCode::MissingTool);
+}
+
+#[test]
 fn tool_versions_are_classified_against_the_supported_range() {
     use tools::{FD, ToolStatus, classify_version, version_token};
     assert_eq!(version_token(b"fd 10.5.0\n").as_deref(), Some("10.5.0"));
