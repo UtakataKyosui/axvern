@@ -188,6 +188,21 @@ fn remove_bytes(dir: &Path, m: &mut Manifest, why: &str) -> Result<(), Error> {
     }
     io(io(File::open(dir))?.sync_all())
 }
+const BUDGET_RESERVE: u64 = 32768;
+const BUDGET_MIN_FREE: u64 = 33792;
+
+/// Largest artifact that fits in `free` bytes while keeping `BUDGET_RESERVE` bytes spare.
+/// Proved in `qualities/verus/budget.rs`; the marked body must stay identical to it.
+fn clamp_budget(wanted: u64, free: u64) -> Option<u64> {
+    // verus-sync: begin clamp_budget
+    if free < BUDGET_MIN_FREE {
+        return None;
+    }
+    let room = free - BUDGET_RESERVE;
+    Some(if wanted < room { wanted } else { room })
+    // verus-sync: end clamp_budget
+}
+
 fn maintain(store: &ExecutionStore, settings: &Results, needed: u64) -> Result<u64, Error> {
     let dir = directory(store)?;
     let mut entries = manifests(&dir)?;
@@ -1041,14 +1056,13 @@ impl<'a> Derivation<'a> {
     /// be evicted to make room, as for any new result.
     pub(crate) fn budget(&self, wanted: u64) -> Result<u64, Error> {
         let wanted = wanted.min(self.settings.max_artifact_bytes);
-        let free = maintain(self.store, self.settings, wanted.saturating_add(32768))?;
-        if free < 33792 {
-            return Err(Error::new(
-                ErrorCode::StorageFull,
-                "no capacity for new result",
-            ));
-        }
-        Ok(wanted.min(free - 32768))
+        let free = maintain(
+            self.store,
+            self.settings,
+            wanted.saturating_add(BUDGET_RESERVE),
+        )?;
+        clamp_budget(wanted, free)
+            .ok_or_else(|| Error::new(ErrorCode::StorageFull, "no capacity for new result"))
     }
     /// Publish `header` and `items` as the immutable available result of `id`.
     #[allow(

@@ -6,6 +6,10 @@ from pathlib import Path
 import subprocess
 
 
+VERUS_SCRIPTS = ('qualities/scripts/verus_check.py', 'qualities/scripts/test_verus_check.py')
+GROUPS = ('rust', 'site', 'links', 'verus')
+
+
 def groups(paths):
     selected = set()
     for path in paths:
@@ -15,10 +19,15 @@ def groups(paths):
             selected.update(('site', 'links'))
         elif path.startswith(('logics/', 'tools/cli/')) or path in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'):
             selected.add('rust')
+            # Proved code is copied from logics/core, so edits there can drift from the proof.
+            if path.startswith('logics/core/'):
+                selected.add('verus')
+        elif path.startswith('qualities/verus/') or path in VERUS_SCRIPTS:
+            selected.add('verus')
         elif path.endswith('.md'):
             selected.add('links')
         else:
-            selected.update(('rust', 'site', 'links'))
+            selected.update(('rust', 'site', 'links', 'verus'))
     return selected
 
 
@@ -40,8 +49,8 @@ def changed_paths(event, head):
 if __name__ == '__main__':
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
     paths = changed_paths(event, os.environ['GITHUB_SHA'])
-    selected = groups(paths) if paths is not None else {'rust', 'site', 'links'}
+    selected = groups(paths) if paths is not None else set(GROUPS)
     print(json.dumps({'changed': paths, 'checks': sorted(selected)}))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-        for group in ('rust', 'site', 'links'):
+        for group in GROUPS:
             output.write(f'{group}={str(group in selected).lower()}\n')

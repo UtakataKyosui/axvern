@@ -70,6 +70,21 @@ Probes hold non-TTY stdin open to detect prompt hangs, use private config/cwd, t
 `cast_*`、`fn_params_excessive_bools`、`wildcard_imports`、`missing_*_doc` は未採用。
 有効化する場合は対象lintごとに指摘を解消してからworkspaceへ追加する。
 `unsafe_code = "forbid"` のため unsafe 関連lintは実質検査対象がない。
+## Verusによる証明
+
+`qualities/verus/budget.rs` は、結果artifactの容量計算 `clamp_budget`
+（`logics/core/src/results.rs`）を [Verus](https://github.com/verus-lang/verus) で証明する。
+証明する内容: `free < 33792` なら `None`、それ以外では `free - 32768` が桁あふれせず、
+返す値は `wanted` と `free - 32768` のどちらも超えない。範囲外（他の関数・I/O・並行性）は証明していない。
+
+- 証明側と本体側の関数本体は `verus-sync` マーカーで囲み、`qualities/scripts/verus_check.py` が
+  空白を除いて一致を検査する。本体を変えたら証明も更新する。
+- ローカル: Verus未導入でも `moon run qualities:verus` は一致検査だけ行う。証明まで走らせるには、
+  [リリース](https://github.com/verus-lang/verus/releases) `0.2026.11.02.8bf68ee` を展開し、
+  `rustup toolchain install 1.99.1 --profile minimal` のうえ `AXVERN_VERUS=<展開先>/verus` を設定する。
+  `AXVERN_REQUIRE_VERUS=1` で未導入を失敗にする。
+- CI: `verus` ジョブがsha256を検証して固定リリースを導入し、`logics/core/` と `qualities/verus/`
+  の変更時に実行する。`verify` には含めない（外部バイナリが必要なため）。
 
 ## CIの実行範囲とキャッシュ
 

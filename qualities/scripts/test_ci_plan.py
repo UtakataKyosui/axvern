@@ -9,18 +9,24 @@ import unittest
 from ci_plan import groups
 
 
+ALL = {'rust', 'site', 'links', 'verus'}
+
+
 class PlanTests(unittest.TestCase):
     def test_groups(self):
         cases = [
-            (['logics/core/src/lib.rs'], {'rust'}),
+            (['logics/core/src/lib.rs'], {'rust', 'verus'}),
+            (['logics/models/src/lib.rs'], {'rust'}),
+            (['qualities/verus/budget.rs'], {'verus'}),
+            (['qualities/scripts/verus_check.py'], {'verus'}),
             (['Cargo.lock'], {'rust'}),
             (['sites/axvern-document-site/docs/en/index.mdx'], {'site', 'links'}),
             (['README.md'], {'links'}),
             (['.github/issue-updates/12.md'], set()),
-            (['.moon/workspace.yml'], {'rust', 'site', 'links'}),
-            (['qualities/scripts/ci_plan.py'], {'rust', 'site', 'links'}),
-            (['new-unknown-file'], {'rust', 'site', 'links'}),
-            (['logics/core/src/lib.rs', 'README.md'], {'rust', 'links'}),
+            (['.moon/workspace.yml'], ALL),
+            (['qualities/scripts/ci_plan.py'], ALL),
+            (['new-unknown-file'], ALL),
+            (['logics/core/src/lib.rs', 'README.md'], {'rust', 'verus', 'links'}),
         ]
         for paths, expected in cases:
             with self.subTest(paths=paths):
@@ -46,9 +52,9 @@ class PlanTests(unittest.TestCase):
             for event, expected in [
                 ({'pull_request': {'base': {'sha': base}}}, {'rust'}),
                 ({'before': base}, {'rust'}),
-                ({'before': '0' * 40}, {'rust', 'site', 'links'}),
-                ({'before': 'missing-revision'}, {'rust', 'site', 'links'}),
-                ({}, {'rust', 'site', 'links'}),  # schedule has no diff base
+                ({'before': '0' * 40}, ALL),
+                ({'before': 'missing-revision'}, ALL),
+                ({}, ALL),  # schedule has no diff base
             ]:
                 (root / 'event.json').write_text(json.dumps(event))
                 output = root / 'output'
